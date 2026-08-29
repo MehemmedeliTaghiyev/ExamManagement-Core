@@ -17,6 +17,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddControllers();
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IExamService, ExamService>();
+builder.Services.AddScoped<ISubmissionService, SubmissionService>();
 
 // Register MSSQL DbContext using connection string from appsettings.json
 builder.Services.AddDbContext<ExamDbContext>(options =>

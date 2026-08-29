@@ -1,6 +1,7 @@
 ﻿using Exam.Core.DTOs.Exam;
 using Exam.Core.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using PagedResult = Exam.Core.DTOs.Exam.PagedResult<Exam.Core.DTOs.Exam.ExamResponseDto>;
 
 namespace Exam.Infrastructure.Services
 {
@@ -131,11 +132,11 @@ namespace Exam.Infrastructure.Services
                           }).FirstOrDefaultAsync();
         }
 
-        public async Task<IEnumerable<ExamResponseDto>> GetAllExamsAsync()
+        public async Task<ExamResponseDto?> GetExamResponseByIdAsync(int id)
         {
             return await (from exam in _context.Exams
                           join subject in _context.Subjects on exam.SubjectId equals subject.Id
-                          orderby exam.CreatedAt descending // Ən son yaradılanlar üstdə olsun
+                          where exam.Id == id
                           select new ExamResponseDto
                           {
                               Id = exam.Id,
@@ -144,13 +145,124 @@ namespace Exam.Infrastructure.Services
                               SubjectName = subject.Name,
                               DurationMinutes = exam.DurationMinutes,
                               TotalQuestions = exam.TotalQuestions,
-                              SubmissionsCount = exam.SubmissionsCount,
                               PdfFilePath = exam.PdfFilePath,
                               Status = exam.Status.ToString(),
                               StartTime = exam.StartTime,
                               EndTime = exam.EndTime,
                               CreatedAt = exam.CreatedAt
-                          }).ToListAsync();
+                          }).FirstOrDefaultAsync();
         }
+
+        public async Task<bool> UpdateExamAsync(int id, UpdateExamDto dto)
+        {
+            // Find the Exam entity directly from the DbContext
+            var exam = await _context.Exams.FindAsync(id);
+            if (exam == null)
+                return false;
+
+            var subjectExists = await _context.Subjects.AnyAsync(s => s.Id == dto.SubjectId);
+            if (!subjectExists)
+                return false;
+
+            exam.SubjectId = dto.SubjectId;
+            exam.Title = dto.Title;
+            exam.DurationMinutes = dto.DurationMinutes;
+            exam.TotalQuestions = dto.TotalQuestions;
+            exam.StartTime = dto.StartTime;
+            exam.EndTime = dto.EndTime;
+            exam.Status = Enum.Parse<Core.Enums.ExamStatus>(dto.Status, ignoreCase: true);
+            _context.Exams.Update(exam);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        public async Task<bool> DeleteExamAsync(int id)
+        {
+            // 1. İmtahanı bazadan axtarırıq
+            var exam = await _context.Exams.FindAsync(id);
+            if (exam == null)
+                return false;
+
+            // 2. Əgər imtahana bağlı PDF faylı varsa, fiziki olaraq diskdən silirik
+            if (!string.IsNullOrEmpty(exam.PdfFilePath))
+            {
+                var relativePath = exam.PdfFilePath.TrimStart('/', '\\');
+                var physicalPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", relativePath);
+
+                if (File.Exists(physicalPath))
+                {
+                    File.Delete(physicalPath);
+                }
+            }
+
+            // 3. Entity-ni bazadan silirik
+            _context.Exams.Remove(exam);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        public async Task<PagedResult<ExamResponseDto>> GetAllExamsAsync(ExamQueryParameters queryParameters)
+        {
+            // 1. Əsas sorğunu hazırlayırıq
+            var query = from exam in _context.Exams
+                        join subject in _context.Subjects on exam.SubjectId equals subject.Id
+                        select new ExamResponseDto
+                        {
+                            Id = exam.Id,
+                            Title = exam.Title,
+                            SubjectId = exam.SubjectId,
+                            SubjectName = subject.Name,
+                            DurationMinutes = exam.DurationMinutes,
+                            TotalQuestions = exam.TotalQuestions,
+                            SubmissionsCount = exam.SubmissionsCount,
+                            PdfFilePath = exam.PdfFilePath,
+                            Status = exam.Status.ToString(),
+                            StartTime = exam.StartTime,
+                            EndTime = exam.EndTime,
+                            CreatedAt = exam.CreatedAt
+                        };
+
+            // 2. Search (Axtarış)
+            if (!string.IsNullOrWhiteSpace(queryParameters.Search))
+            {
+                var searchTerm = queryParameters.Search.Trim().ToLower();
+                query = query.Where(e => e.Title.ToLower().Contains(searchTerm));
+            }
+
+            // 3. Filtering (Fənnə görə)
+            if (queryParameters.SubjectId.HasValue)
+            {
+                query = query.Where(e => e.SubjectId == queryParameters.SubjectId.Value);
+            }
+
+            // 4. Filtering (Statusa görə)
+            if (!string.IsNullOrWhiteSpace(queryParameters.Status))
+            {
+                var statusTerm = queryParameters.Status.Trim().ToLower();
+                query = query.Where(e => e.Status.ToLower() == statusTerm);
+            }
+
+            // 5. Ümumi uyğun gələn sayını alırıq
+            var totalCount = await query.CountAsync();
+
+            // 6. Sıralama və Pagination (Səhifələmə)
+            var items = await query
+                .OrderByDescending(e => e.CreatedAt)
+                .Skip((queryParameters.PageNumber - 1) * queryParameters.PageSize)
+                .Take(queryParameters.PageSize)
+                .ToListAsync();
+
+            // 7. Qaydılacaq obyekt
+            return new PagedResult<ExamResponseDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                PageNumber = queryParameters.PageNumber,
+                PageSize = queryParameters.PageSize
+            };
+        }
+        
     }
 }

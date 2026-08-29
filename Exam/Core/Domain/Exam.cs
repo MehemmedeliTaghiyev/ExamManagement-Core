@@ -11,7 +11,7 @@ namespace Exam.Core.Domain
         public int TotalQuestions { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }
-        public ExamStatus Status { get; set; } = ExamStatus.Draft;
+        public ExamStatus Status { get; set; }
         public int SubmissionsCount { get; set; } = 0;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string? PdfFilePath {  get; set; }   

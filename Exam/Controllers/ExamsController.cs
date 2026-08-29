@@ -58,11 +58,24 @@ namespace Exam.Controllers
             );
         }
 
+        // GET: api/exams?search=math&subjectId=2&pageNumber=1&pageSize=10
         [HttpGet]
-        public async Task<IActionResult> GetAllExams()
+        public async Task<IActionResult> GetAllExams([FromQuery] ExamQueryParameters queryParameters)
         {
-            var exams = await _examService.GetAllExamsAsync();
-            return Ok(exams);
+            var pagedExams = await _examService.GetAllExamsAsync(queryParameters);
+            return Ok(pagedExams);
+        }
+
+        // GET: api/exams/5
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetExamById(int id)
+        {
+            var exam = await _examService.GetExamResponseByIdAsync(id);
+
+            if (exam == null)
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+
+            return Ok(exam);
         }
 
 
@@ -84,6 +97,37 @@ namespace Exam.Controllers
                 return NotFound(new { message = "İmtahan tapılmadı." });
 
             return Ok(new { message = "PDF uğurla yükləndi.", filePath = resultPath });
+        }
+
+        // PUT: api/exams/5
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateExam(int id, [FromBody] UpdateExamDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var isUpdated = await _examService.UpdateExamAsync(id, dto);
+
+            if (!isUpdated)
+            {
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı və ya daxil edilən SubjectId yanlışdır." });
+            }
+
+            return NoContent(); // 204 NoContent - Uğurlu yeniləmə cavabı
+        }
+
+        // DELETE: api/exams/5
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteExam(int id)
+        {
+            var isDeleted = await _examService.DeleteExamAsync(id);
+
+            if (!isDeleted)
+            {
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+            }
+
+            return Ok(new { message = "İmtahan uğurla silindi." });
         }
     }
 }
