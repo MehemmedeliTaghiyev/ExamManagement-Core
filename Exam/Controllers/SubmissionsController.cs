@@ -1,5 +1,6 @@
 ﻿using Exam.Core.DTOs.Submission;
 using Exam.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -7,6 +8,7 @@ namespace Exam.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Roles = "Student")] // Secures the entire controller for Students
     public class SubmissionsController : ControllerBase
     {
         private readonly ISubmissionService _submissionService;

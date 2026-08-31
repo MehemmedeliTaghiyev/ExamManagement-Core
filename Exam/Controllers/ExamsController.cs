@@ -1,5 +1,6 @@
 ﻿using Exam.Core.DTOs.Exam;
 using Exam.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ namespace Exam.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize] // Requires any valid JWT token for all endpoints by default
     public class ExamsController : ControllerBase
     {
         private readonly IExamService _examService;
@@ -38,6 +40,7 @@ namespace Exam.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> CreateExam([FromBody] CreateExamDto dto)
         {
             if (!ModelState.IsValid)
@@ -50,9 +53,9 @@ namespace Exam.Controllers
                 return BadRequest(new { message = "Seçilən fənn (SubjectId) sistemdə tapılmadı." });
             }
 
-            // CreatedAtAction: 1-ci parametr action adı, 2-ci parametr route id-si, 3-cü parametr body-də qayıdan obyekt
+            // Point directly to the Controller action method name
             return CreatedAtAction(
-                nameof(_examService.GetExamByIdAsync),
+                nameof(GetExamById),
                 new { id = createdExam.Id },
                 createdExam
             );
@@ -70,11 +73,8 @@ namespace Exam.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetExamById(int id)
         {
-            var exam = await _examService.GetExamResponseByIdAsync(id);
-
-            if (exam == null)
-                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
-
+            var exam = await _examService.GetExamByIdAsync(id);
+            if (exam == null) return NotFound();
             return Ok(exam);
         }
 
