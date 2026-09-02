@@ -1,4 +1,5 @@
-﻿using Exam.Core.DTOs.Exam;
+﻿using Exam.Core.Domain;
+using Exam.Core.DTOs.Exam;
 using Exam.Core.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using PagedResult = Exam.Core.DTOs.Exam.PagedResult<Exam.Core.DTOs.Exam.ExamResponseDto>;
@@ -84,33 +85,14 @@ namespace Exam.Infrastructure.Services
             return await query.ToListAsync();
         }
 
-        public async Task<string?> UploadPdfAsync(int examId, IFormFile file)
+        public async Task<bool> UpdateExamPdfPathAsync(int examId, string relativePath)
         {
-            // 1. İmtahanın varlığını yoxlayırıq
             var exam = await _context.Exams.FindAsync(examId);
-            if (exam == null)
-                return null; // Controller-də 404 qaytarmaq üçün null dönürük
+            if (exam == null) return false;
 
-            // 2. Qovluğu hazırlayırıq (wwwroot/uploads/pdfs)
-            var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "pdfs");
-            if (!Directory.Exists(uploadsFolder))
-                Directory.CreateDirectory(uploadsFolder);
-
-            // 3. Unikal fayl adı yaradıb fiziki diskə yazırıq
-            var uniqueFileName = $"{Guid.NewGuid()}_{file.FileName}";
-            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-            {
-                await file.CopyToAsync(stream);
-            }
-
-            // 4. DB-də PDF yolunu yeniləyirik
-            var relativePath = $"/uploads/pdfs/{uniqueFileName}";
             exam.PdfFilePath = relativePath;
             await _context.SaveChangesAsync();
-
-            return relativePath;
+            return true;
         }
 
         public async Task<ExamResponseDto?> GetExamByIdAsync(int id)
@@ -263,6 +245,61 @@ namespace Exam.Infrastructure.Services
                 PageSize = queryParameters.PageSize
             };
         }
-        
+
+        public async Task<QuestionResponseDto?> AddQuestionToExamAsync(int examId, CreateQuestionDto dto)
+        {
+            var exam = await _context.Exams.FindAsync(examId);
+            if (exam == null) return null;
+
+            // 1. Save Question entity
+            var question = new Question
+            {
+                ExamId = examId,
+                Text = dto.Text,
+                Points = dto.Points,
+                Type = dto.Type
+            };
+
+            _context.Questions.Add(question);
+            await _context.SaveChangesAsync(); // Generates question.Id
+
+            // 2. Save options linked by QuestionId
+            var optionsList = new List<QuestionOption>();
+
+            if (dto.Options != null && dto.Options.Any())
+            {
+                foreach (var optDto in dto.Options)
+                {
+                    var option = new QuestionOption
+                    {
+                        QuestionId = question.Id,
+                        OptionText = optDto.OptionText,
+                        IsCorrect = optDto.IsCorrect
+                    };
+                    optionsList.Add(option);
+                }
+
+                _context.QuestionOptions.AddRange(optionsList);
+                await _context.SaveChangesAsync();
+            }
+
+            // 3. Return response payload
+            return new QuestionResponseDto
+            {
+                Id = question.Id,
+                ExamId = question.ExamId,
+                Text = question.Text,
+                Points = question.Points,
+                Type = question.Type,
+                Options = optionsList.Select(o => new QuestionOptionResponseDto
+                {
+                    Id = o.Id,
+                    QuestionId = o.QuestionId,
+                    OptionText = o.OptionText,
+                    IsCorrect = o.IsCorrect
+                }).ToList()
+            };
+        }
+
     }
 }

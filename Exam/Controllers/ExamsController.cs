@@ -78,25 +78,59 @@ namespace Exam.Controllers
             return Ok(exam);
         }
 
-
-
         [HttpPost("{id}/upload-pdf")]
-        public async Task<IActionResult> UploadPdf(int id, IFormFile file)
+        [Authorize(Roles = "Teacher,Admin")]
+        public async Task<IActionResult> UploadExamPdf(int id, IFormFile file)
         {
-            // 1. Validation (HTTP spesifik yoxlamalar)
             if (file == null || file.Length == 0)
-                return BadRequest(new { message = "Fayl seçilməyib." });
+            {
+                return BadRequest(new { message = "Fayl seçilməyib və ya boşdur." });
+            }
 
-            if (Path.GetExtension(file.FileName).ToLower() != ".pdf")
+            // Ensure only PDF files are allowed
+            if (!file.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) &&
+                !Path.GetExtension(file.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            {
                 return BadRequest(new { message = "Yalnız PDF formatında fayllar qəbul edilir." });
+            }
 
-            // 2. Service-ə müraciət
-            var resultPath = await _examService.UploadPdfAsync(id, file);
+            var exam = await _examService.GetExamByIdAsync(id);
+            if (exam == null)
+            {
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+            }
 
-            if (resultPath == null)
-                return NotFound(new { message = "İmtahan tapılmadı." });
+            // Create wwwroot/uploads directory if it doesn't exist
+            var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
+            if (!Directory.Exists(uploadsFolder))
+            {
+                Directory.CreateDirectory(uploadsFolder);
+            }
 
-            return Ok(new { message = "PDF uğurla yükləndi.", filePath = resultPath });
+            // Generate a unique filename to prevent overwriting existing files
+            var uniqueFileName = $"{Guid.NewGuid()}_{Path.GetFileName(file.FileName)}";
+            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+
+            using (var stream = new FileStream(filePath, FileMode.Create))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            // Relative path to store in database
+            var relativePath = $"/uploads/{uniqueFileName}";
+
+            // Update entity in database via service
+            var updated = await _examService.UpdateExamPdfPathAsync(id, relativePath);
+            if (!updated)
+            {
+                return StatusCode(500, new { message = "Fayl saxlanıldı, lakin məlumat bazası yenilənmədi." });
+            }
+
+            return Ok(new
+            {
+                message = "PDF uğurla yükləndi.",
+                pdfFilePath = relativePath
+            });
         }
 
         // PUT: api/exams/5
@@ -128,6 +162,22 @@ namespace Exam.Controllers
             }
 
             return Ok(new { message = "İmtahan uğurla silindi." });
+        }
+
+        [HttpPost("{id}/questions")]
+        [Authorize(Roles = "Teacher,Admin")]
+        public async Task<IActionResult> AddQuestion(int id, [FromBody] CreateQuestionDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var createdQuestion = await _examService.AddQuestionToExamAsync(id, dto);
+            if (createdQuestion == null)
+            {
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+            }
+
+            return Ok(createdQuestion);
         }
     }
 }

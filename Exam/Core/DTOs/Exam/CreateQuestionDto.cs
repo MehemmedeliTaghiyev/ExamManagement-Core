@@ -1,14 +1,12 @@
 ﻿using Exam.Core.Enums;
 
-namespace Exam.Core.Domain
+namespace Exam.Core.DTOs.Exam
 {
-    public class Question
+    public class CreateQuestionDto
     {
-        public int Id { get; set; }
-        public int ExamId { get; set; } // Foreign Key to Exam
         public string Text { get; set; } = string.Empty;
         public int Points { get; set; } = 1;
         public QuestionType Type { get; set; } = QuestionType.SingleChoice;
-
+        public List<CreateQuestionOptionDto> Options { get; set; } = new();
     }
 }
