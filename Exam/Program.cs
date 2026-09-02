@@ -16,10 +16,13 @@ var builder = WebApplication.CreateBuilder(args);
 // 1. Configure CORS for React Frontend
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowFrontend",
-        policy => policy.WithOrigins("http://localhost:5173")
-                        .AllowAnyHeader()
-                        .AllowAnyMethod());
+    options.AddPolicy("AllowReactApp", policy =>
+    {
+        policy.WithOrigins("http://localhost:5173") // Default Vite dev server URL
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
 });
 
 // 2. Add Controllers
@@ -111,7 +114,7 @@ if (app.Environment.IsDevelopment())
         options.RoutePrefix = "swagger"; // Opens UI at /swagger
     });
 }
-
+app.UseStaticFiles();
 app.UseHttpsRedirection();
 
 app.UseCors("AllowFrontend");

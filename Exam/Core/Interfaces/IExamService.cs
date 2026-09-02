@@ -16,6 +16,7 @@ namespace Exam.Core.Interfaces
         Task<Exam.Core.Domain.Exam?> CreateExamAsync(CreateExamDto dto);
         Task<bool> UpdateExamAsync(int id, UpdateExamDto dto);
         Task<bool> DeleteExamAsync(int id);
-        Task<string?> UploadPdfAsync(int examId, Microsoft.AspNetCore.Http.IFormFile file);
+        Task<bool> UpdateExamPdfPathAsync(int examId, string relativePath);
+        Task<QuestionResponseDto?> AddQuestionToExamAsync(int examId, CreateQuestionDto dto);
     }
 }

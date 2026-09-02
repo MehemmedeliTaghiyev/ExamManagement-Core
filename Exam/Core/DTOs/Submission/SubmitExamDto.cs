@@ -3,6 +3,8 @@
     public class SubmitExamDto
     {
         public int StudentExamId { get; set; }
-        public Dictionary<int, int> Answers { get; set; } = new(); // Key: QuestionId, Value: SelectedOptionId
+
+        // Key: QuestionId, Value: SelectedOptionId
+        public Dictionary<int, int> Answers { get; set; } = new();
     }
 }
