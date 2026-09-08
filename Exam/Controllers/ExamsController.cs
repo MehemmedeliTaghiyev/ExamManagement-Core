@@ -32,7 +32,7 @@ namespace Exam.Controllers
         }
 
         // GET: api/exams
-        [HttpGet]
+        [HttpGet("cards")]
         public async Task<ActionResult<IReadOnlyList<ExamCardDto>>> GetAllExamCards()
         {
             var cards = await _examService.GetStudentExamCardsAsync();

@@ -37,6 +37,7 @@ builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IExamService, ExamService>();
 builder.Services.AddScoped<ISubmissionService, SubmissionService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IQuestionService, QuestionService>();
 
 // 4. Register MSSQL DbContext
 builder.Services.AddDbContext<ExamDbContext>(options =>
@@ -117,7 +118,8 @@ if (app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseHttpsRedirection();
 
-app.UseCors("AllowFrontend");
+app.UseCors("AllowReactApp");
+app.UseRouting();
 
 // IMPORTANT: Authentication MUST precede Authorization
 app.UseAuthentication();
