@@ -10,5 +10,8 @@ namespace Exam.Core.Domain
         public string PasswordHash { get; set; } = string.Empty;
         public UserRole Role { get; set; } = UserRole.Student;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public bool IsAccessEnabled { get; set; } = true;
+        public bool IsDeleted { get; set; }
+        public DateTime? DeletedAt { get; set; }
     }
 }

@@ -29,6 +29,14 @@ namespace Exam.Infrastructure.Configurations
             builder.Property(u => u.Role)
                 .HasConversion<string>()
                 .HasMaxLength(20);
+
+            builder.Property(u => u.IsAccessEnabled)
+                .HasDefaultValue(true);
+
+            builder.Property(u => u.IsDeleted)
+                .HasDefaultValue(false);
+
+            builder.HasQueryFilter(u => !u.IsDeleted);
         }
     }
 }

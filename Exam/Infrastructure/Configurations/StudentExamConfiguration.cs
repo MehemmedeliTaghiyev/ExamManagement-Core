@@ -10,6 +10,12 @@ namespace Exam.Infrastructure.Configurations
         {
             builder.ToTable("StudentExams");
             builder.HasKey(se => se.Id);
+            builder.Property(se => se.FinalScore)
+            .HasPrecision(18, 2);
+
+            builder.Property(se => se.Score)
+                .HasPrecision(18, 2);
+
             builder.Property(se => se.Status).HasConversion<string>().HasMaxLength(20);
 
             builder.HasOne<User>()

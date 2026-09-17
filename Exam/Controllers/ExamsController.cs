@@ -13,10 +13,32 @@ namespace Exam.Controllers
     public class ExamsController : ControllerBase
     {
         private readonly IExamService _examService;
+        private readonly IFileStorage _files;
 
-        public ExamsController(IExamService examService)
+        public ExamsController(IExamService examService, IFileStorage files)
         {
             _examService = examService;
+            _files = files;
+        }
+
+        [HttpGet("{id:int}/pdf")]
+        public async Task<IActionResult> GetExamPdf(int id)
+        {
+            var exam = await _examService.GetExamByIdAsync(id);
+            if (exam == null || string.IsNullOrWhiteSpace(exam.PdfFilePath))
+            {
+                return NotFound(new { message = "PDF tapılmadı." });
+            }
+
+            var stream = await _files.OpenReadAsync(exam.PdfFilePath);
+            if (stream == null)
+            {
+                return NotFound(new { message = "PDF faylı diskdə tapılmadı." });
+            }
+
+            Response.Headers.CacheControl = "private, max-age=120";
+            Response.Headers.Append("X-Content-Type-Options", "nosniff");
+            return File(stream, "application/pdf", enableRangeProcessing: true);
         }
 
         // GET: api/exams/1
@@ -80,57 +102,43 @@ namespace Exam.Controllers
 
         [HttpPost("{id}/upload-pdf")]
         [Authorize(Roles = "Teacher,Admin")]
-        public async Task<IActionResult> UploadExamPdf(int id, IFormFile file)
+        [RequestSizeLimit(52_428_800)]
+        public async Task<IActionResult> UploadExamPdf(int id, IFormFile file, [FromForm] int questionCount = 0)
         {
             if (file == null || file.Length == 0)
             {
                 return BadRequest(new { message = "Fayl seçilməyib və ya boşdur." });
             }
 
-            // Ensure only PDF files are allowed
             if (!file.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) &&
                 !Path.GetExtension(file.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
             {
                 return BadRequest(new { message = "Yalnız PDF formatında fayllar qəbul edilir." });
             }
 
-            var exam = await _examService.GetExamByIdAsync(id);
-            if (exam == null)
+            var count = questionCount > 0 ? questionCount : 1;
+            await using var stream = file.OpenReadStream();
+            var updated = await _examService.SaveExamPdfAndSlotsAsync(
+                id,
+                stream,
+                file.FileName,
+                file.ContentType,
+                count);
+
+            if (updated == null)
             {
                 return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
             }
 
-            // Create wwwroot/uploads directory if it doesn't exist
-            var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
-            if (!Directory.Exists(uploadsFolder))
-            {
-                Directory.CreateDirectory(uploadsFolder);
-            }
+            return Ok(updated);
+        }
 
-            // Generate a unique filename to prevent overwriting existing files
-            var uniqueFileName = $"{Guid.NewGuid()}_{Path.GetFileName(file.FileName)}";
-            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-            {
-                await file.CopyToAsync(stream);
-            }
-
-            // Relative path to store in database
-            var relativePath = $"/uploads/{uniqueFileName}";
-
-            // Update entity in database via service
-            var updated = await _examService.UpdateExamPdfPathAsync(id, relativePath);
-            if (!updated)
-            {
-                return StatusCode(500, new { message = "Fayl saxlanıldı, lakin məlumat bazası yenilənmədi." });
-            }
-
-            return Ok(new
-            {
-                message = "PDF uğurla yükləndi.",
-                pdfFilePath = relativePath
-            });
+        [HttpPost("{id}/pdf-pack")]
+        [Authorize(Roles = "Teacher,Admin")]
+        [RequestSizeLimit(52_428_800)]
+        public async Task<IActionResult> UploadPdfPack(int id, IFormFile file, [FromForm] int questionCount)
+        {
+            return await UploadExamPdf(id, file, questionCount);
         }
 
         // PUT: api/exams/5

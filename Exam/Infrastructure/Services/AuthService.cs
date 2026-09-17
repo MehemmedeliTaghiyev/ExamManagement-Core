@@ -1,5 +1,6 @@
 ﻿using Exam.Core.Domain;
 using Exam.Core.DTOs.Auth;
+using Exam.Core.Enums;
 using Exam.Core.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -23,9 +24,14 @@ namespace Exam.Infrastructure.Services
         }
         public async Task<AuthDTOs.AuthResponseDto?> LoginAsync(AuthDTOs.LoginRequestDto dto)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
-            if (user == null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+            var user = await _context.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Email == dto.Email);
+            if (user == null || user.IsDeleted || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
                 return null;
+
+            if (user.Role != UserRole.Admin && !user.IsAccessEnabled)
+            {
+                throw new InvalidOperationException("ACCESS_CLOSED");
+            }
 
             var token = GenerateJwtToken(user);
             return new AuthResponseDto(user.Id, user.FullName, user.Email, user.Role.ToString(), token);
@@ -61,6 +67,7 @@ namespace Exam.Infrastructure.Services
             var claims = new[]
             {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim(ClaimTypes.Name, user.FullName),
             new Claim(ClaimTypes.Role, user.Role.ToString())

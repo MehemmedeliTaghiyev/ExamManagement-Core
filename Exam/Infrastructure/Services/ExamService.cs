@@ -9,36 +9,108 @@ namespace Exam.Infrastructure.Services
     public class ExamService : IExamService
     {
         private readonly ExamDbContext _context;
+        private readonly IFileStorage _files;
+        private readonly IQuestionService _questions;
 
-        public ExamService(ExamDbContext context)
+        public ExamService(ExamDbContext context, IFileStorage files, IQuestionService questions)
         {
             _context = context;
+            _files = files;
+            _questions = questions;
+        }
+
+        private static DateTime NormalizeTime(DateTime value, DateTime fallback)
+        {
+            if (value.Year < 2000) return fallback;
+            return value.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+                : value.ToUniversalTime();
+        }
+
+        private static Core.Enums.ExamStatus ResolveStatus(DateTime start, DateTime end, DateTime now)
+        {
+            if (now >= end) return Core.Enums.ExamStatus.Finished;
+            if (now < start) return Core.Enums.ExamStatus.Scheduled;
+            return Core.Enums.ExamStatus.Live;
+        }
+
+        public async Task SyncExamStatusesAsync()
+        {
+            var now = DateTime.UtcNow;
+            var exams = await _context.Exams.ToListAsync();
+            var changed = false;
+
+            foreach (var exam in exams)
+            {
+                if (exam.StartTime.Year < 2000)
+                {
+                    exam.StartTime = exam.CreatedAt.Year > 2000 ? exam.CreatedAt : now;
+                    changed = true;
+                }
+
+                var start = NormalizeTime(exam.StartTime, now);
+                var durationEnd = start.AddMinutes(Math.Max(exam.DurationMinutes, 1));
+                var end = exam.EndTime.Year >= 2000 ? NormalizeTime(exam.EndTime, durationEnd) : durationEnd;
+                if (end <= start)
+                {
+                    end = durationEnd;
+                }
+
+                if (exam.StartTime != start)
+                {
+                    exam.StartTime = start;
+                    changed = true;
+                }
+
+                if (exam.EndTime != end)
+                {
+                    exam.EndTime = end;
+                    changed = true;
+                }
+
+                var next = ResolveStatus(start, end, now);
+                if (exam.Status != next)
+                {
+                    exam.Status = next;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                await _context.SaveChangesAsync();
+            }
         }
 
         public async Task<Exam.Core.Domain.Exam?> CreateExamAsync(CreateExamDto dto)
         {
-            // 1. Fənnin (Subject) daxil edilən ID ilə varlığını yoxlayırıq
             var subjectExists = await _context.Subjects.AnyAsync(s => s.Id == dto.SubjectId);
             if (!subjectExists)
             {
-                return null; // Fənn tapılmadıqda controller-ə null qaytarırıq
+                return null;
             }
 
-            // 2. Yeni Exam obyektini formalaşdırırıq
+            var now = DateTime.UtcNow;
+            var start = NormalizeTime(dto.StartTime, now);
+            var end = NormalizeTime(dto.EndTime, start.AddMinutes(Math.Max(dto.DurationMinutes, 1)));
+            if (end <= start)
+            {
+                end = start.AddMinutes(Math.Max(dto.DurationMinutes, 1));
+            }
+
             var newExam = new Exam.Core.Domain.Exam
             {
                 SubjectId = dto.SubjectId,
                 Title = dto.Title,
                 DurationMinutes = dto.DurationMinutes,
                 TotalQuestions = dto.TotalQuestions,
-                StartTime = dto.StartTime,
-                EndTime = dto.EndTime,
-                Status = Core.Enums.ExamStatus.Live, // Susmaya görə status
+                StartTime = start,
+                EndTime = end,
+                Status = ResolveStatus(start, end, now),
                 SubmissionsCount = 0,
-                CreatedAt = DateTime.UtcNow // Bazaya düşən mütləq tarix
+                CreatedAt = now
             };
 
-            // 3. Əlavə edib yadda saxlayırıq
             _context.Exams.Add(newExam);
             await _context.SaveChangesAsync();
 
@@ -47,6 +119,7 @@ namespace Exam.Infrastructure.Services
 
         public async Task<ExamCardDto?> GetExamCardByIdAsync(int examId)
         {
+            await SyncExamStatusesAsync();
             // Joining Exam with Subject to populate SubjectName
             var query = from exam in _context.Exams
                         where exam.Id == examId
@@ -60,14 +133,18 @@ namespace Exam.Infrastructure.Services
                             DurationMinutes = exam.DurationMinutes,
                             SubmissionsCount = exam.SubmissionsCount,
                             StartTime = exam.StartTime,
-                            Status = exam.Status.ToString()
+                            EndTime = exam.EndTime,
+                            Status = exam.Status.ToString(),
+                            PdfFilePath = exam.PdfFilePath
                         };
 
-            return await query.FirstOrDefaultAsync();
+            var card = await query.FirstOrDefaultAsync();
+            return AttachUrl(card);
         }
 
         public async Task<IReadOnlyList<ExamCardDto>> GetStudentExamCardsAsync()
         {
+            await SyncExamStatusesAsync();
             var query = from exam in _context.Exams
                         join subject in _context.Subjects on exam.SubjectId equals subject.Id
                         select new ExamCardDto
@@ -79,10 +156,14 @@ namespace Exam.Infrastructure.Services
                             DurationMinutes = exam.DurationMinutes,
                             SubmissionsCount = exam.SubmissionsCount,
                             StartTime = exam.StartTime,
-                            Status = exam.Status.ToString()
+                            EndTime = exam.EndTime,
+                            Status = exam.Status.ToString(),
+                            PdfFilePath = exam.PdfFilePath
                         };
 
-            return await query.ToListAsync();
+            var cards = await query.ToListAsync();
+            cards.ForEach(c => AttachUrl(c));
+            return cards;
         }
 
         public async Task<bool> UpdateExamPdfPathAsync(int examId, string relativePath)
@@ -95,9 +176,50 @@ namespace Exam.Infrastructure.Services
             return true;
         }
 
+        public async Task<ExamResponseDto?> SaveExamPdfAndSlotsAsync(
+            int examId,
+            Stream content,
+            string fileName,
+            string contentType,
+            int questionCount)
+        {
+            var exam = await _context.Exams.FindAsync(examId);
+            if (exam == null) return null;
+
+            questionCount = Math.Clamp(questionCount, 1, 200);
+
+            if (!string.IsNullOrWhiteSpace(exam.PdfFilePath))
+            {
+                await _files.DeleteAsync(exam.PdfFilePath);
+            }
+
+            var stored = await _files.SaveAsync(content, fileName, contentType, $"exams/{examId}");
+            exam.PdfFilePath = stored.Key;
+            exam.TotalQuestions = Math.Max(exam.TotalQuestions, questionCount);
+            await _context.SaveChangesAsync();
+
+            await _questions.EnsureChoiceSlotsAsync(examId, questionCount);
+            return await GetExamByIdAsync(examId);
+        }
+
+        private ExamCardDto? AttachUrl(ExamCardDto? dto)
+        {
+            if (dto == null) return null;
+            dto.PdfFileUrl = _files.ToPublicUrl(dto.PdfFilePath);
+            return dto;
+        }
+
+        private ExamResponseDto? AttachUrl(ExamResponseDto? dto)
+        {
+            if (dto == null) return null;
+            dto.PdfFileUrl = _files.ToPublicUrl(dto.PdfFilePath);
+            return dto;
+        }
+
         public async Task<ExamResponseDto?> GetExamByIdAsync(int id)
         {
-            return await (from exam in _context.Exams
+            await SyncExamStatusesAsync();
+            var dto = await (from exam in _context.Exams
                           join subject in _context.Subjects on exam.SubjectId equals subject.Id
                           where exam.Id == id
                           select new ExamResponseDto
@@ -110,13 +232,18 @@ namespace Exam.Infrastructure.Services
                               TotalQuestions = exam.TotalQuestions,
                               SubmissionsCount = exam.SubmissionsCount,
                               PdfFilePath = exam.PdfFilePath,
-                              StartTime = exam.StartTime
+                              Status = exam.Status.ToString(),
+                              StartTime = exam.StartTime,
+                              EndTime = exam.EndTime,
+                              CreatedAt = exam.CreatedAt
                           }).FirstOrDefaultAsync();
+            return AttachUrl(dto);
         }
 
         public async Task<ExamResponseDto?> GetExamResponseByIdAsync(int id)
         {
-            return await (from exam in _context.Exams
+            await SyncExamStatusesAsync();
+            var dto = await (from exam in _context.Exams
                           join subject in _context.Subjects on exam.SubjectId equals subject.Id
                           where exam.Id == id
                           select new ExamResponseDto
@@ -133,6 +260,7 @@ namespace Exam.Infrastructure.Services
                               EndTime = exam.EndTime,
                               CreatedAt = exam.CreatedAt
                           }).FirstOrDefaultAsync();
+            return AttachUrl(dto);
         }
 
         public async Task<bool> UpdateExamAsync(int id, UpdateExamDto dto)
@@ -169,13 +297,7 @@ namespace Exam.Infrastructure.Services
             // 2. Əgər imtahana bağlı PDF faylı varsa, fiziki olaraq diskdən silirik
             if (!string.IsNullOrEmpty(exam.PdfFilePath))
             {
-                var relativePath = exam.PdfFilePath.TrimStart('/', '\\');
-                var physicalPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", relativePath);
-
-                if (File.Exists(physicalPath))
-                {
-                    File.Delete(physicalPath);
-                }
+                await _files.DeleteAsync(exam.PdfFilePath);
             }
 
             // 3. Entity-ni bazadan silirik
@@ -187,6 +309,7 @@ namespace Exam.Infrastructure.Services
 
         public async Task<PagedResult<ExamResponseDto>> GetAllExamsAsync(ExamQueryParameters queryParameters)
         {
+            await SyncExamStatusesAsync();
             // 1. Əsas sorğunu hazırlayırıq
             var query = from exam in _context.Exams
                         join subject in _context.Subjects on exam.SubjectId equals subject.Id
@@ -235,6 +358,7 @@ namespace Exam.Infrastructure.Services
                 .Skip((queryParameters.PageNumber - 1) * queryParameters.PageSize)
                 .Take(queryParameters.PageSize)
                 .ToListAsync();
+            items.ForEach(i => AttachUrl(i));
 
             // 7. Qaydılacaq obyekt
             return new PagedResult<ExamResponseDto>
@@ -273,7 +397,7 @@ namespace Exam.Infrastructure.Services
                     var option = new QuestionOption
                     {
                         QuestionId = question.Id,
-                        OptionText = optDto.OptionText,
+                        OptionText = string.IsNullOrWhiteSpace(optDto.OptionText) ? (optDto.Text ?? string.Empty) : optDto.OptionText,
                         IsCorrect = optDto.IsCorrect
                     };
                     optionsList.Add(option);

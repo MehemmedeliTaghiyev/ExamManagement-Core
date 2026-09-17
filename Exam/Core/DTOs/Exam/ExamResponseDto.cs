@@ -10,6 +10,7 @@
         public int TotalQuestions { get; set; }
         public int SubmissionsCount { get; set; }
         public string? PdfFilePath { get; set; }
+        public string? PdfFileUrl { get; set; }
         public string Status { get; set; } = string.Empty;
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }

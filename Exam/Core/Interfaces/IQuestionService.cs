@@ -7,5 +7,8 @@ namespace Exam.Core.Interfaces
     {
         Task<List<QuestionResponseDto>> GetQuestionsByExamIdAsync(int examId);
         Task<Question> CreateQuestionAsync(int examId, CreateQuestionDto dto);
+        Task<int> EnsureChoiceSlotsAsync(int examId, int count);
+        Task SetCorrectLettersAsync(int examId, IReadOnlyList<AnswerKeyItemDto> items);
+        Task<List<QuestionDifficultyDto>> GetQuestionDifficultyAsync(int examId);
     }
 }
