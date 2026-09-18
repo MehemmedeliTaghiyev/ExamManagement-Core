@@ -140,7 +140,7 @@ namespace Exam.Migrations
                     b.Property<int>("QuestionId")
                         .HasColumnType("int");
 
-                    b.Property<int>("SelectedOptionId")
+                    b.Property<int?>("SelectedOptionId")
                         .HasColumnType("int");
 
                     b.Property<int>("StudentExamId")
@@ -175,9 +175,11 @@ namespace Exam.Migrations
                         .HasColumnType("int");
 
                     b.Property<decimal>("FinalScore")
+                        .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<int>("Score")
+                        .HasPrecision(18, 2)
                         .HasColumnType("int");
 
                     b.Property<DateTime>("StartedAt")
@@ -303,8 +305,7 @@ namespace Exam.Migrations
                     b.HasOne("Exam.Core.Domain.QuestionOption", null)
                         .WithMany()
                         .HasForeignKey("SelectedOptionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Exam.Core.Domain.StudentExam", null)
                         .WithMany()

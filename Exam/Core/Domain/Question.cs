@@ -9,6 +9,7 @@ namespace Exam.Core.Domain
         public string Text { get; set; } = string.Empty;
         public int Points { get; set; } = 1;
         public QuestionType Type { get; set; } = QuestionType.SingleChoice;
-
+        public string InputKind { get; set; } = "Choice";
+        public string? CorrectText { get; set; }
     }
 }

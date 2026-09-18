@@ -9,6 +9,8 @@ namespace Exam.Core.DTOs.Exam
         public string Text { get; set; } = string.Empty;
         public int Points { get; set; }
         public QuestionType Type { get; set; }
+        public string InputKind { get; set; } = "Choice";
+        public string? CorrectText { get; set; }
         public List<QuestionOptionResponseDto> Options { get; set; } = new();
     }
 }

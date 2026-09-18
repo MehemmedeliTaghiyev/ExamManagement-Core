@@ -17,6 +17,8 @@ namespace Exam.Core.Interfaces
         Task<bool> UpdateExamAsync(int id, UpdateExamDto dto);
         Task<bool> DeleteExamAsync(int id);
         Task<bool> UpdateExamPdfPathAsync(int examId, string relativePath);
+        Task<ExamResponseDto?> SaveExamPdfAndSlotsAsync(int examId, Stream content, string fileName, string contentType, int questionCount);
         Task<QuestionResponseDto?> AddQuestionToExamAsync(int examId, CreateQuestionDto dto);
+        Task SyncExamStatusesAsync();
     }
 }

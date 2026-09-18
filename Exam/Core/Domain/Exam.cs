@@ -14,6 +14,7 @@ namespace Exam.Core.Domain
         public ExamStatus Status { get; set; }
         public int SubmissionsCount { get; set; } = 0;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-        public string? PdfFilePath {  get; set; }   
+        public string? PdfFilePath {  get; set; }
+        public int? TeacherId { get; set; }   
     }
 }
