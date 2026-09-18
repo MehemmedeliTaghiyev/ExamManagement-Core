@@ -1,5 +1,6 @@
 ﻿using Exam.Core.DTOs.Exam;
 using Exam.Core.Interfaces;
+using Exam.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -62,9 +63,9 @@ namespace Exam.Controllers
         }
 
         [HttpPost]
-        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> CreateExam([FromBody] CreateExamDto dto)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
@@ -100,18 +101,25 @@ namespace Exam.Controllers
             return Ok(exam);
         }
 
-        [HttpPost("{id}/upload-pdf")]
-        [Authorize(Roles = "Teacher,Admin")]
+        [HttpPost("{id:int}/upload-pdf")]
+        [HttpPost("{id:int}/pdf-pack")]
         [RequestSizeLimit(52_428_800)]
+        [RequestFormLimits(MultipartBodyLengthLimit = 52_428_800)]
         public async Task<IActionResult> UploadExamPdf(int id, IFormFile file, [FromForm] int questionCount = 0)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User))
+            {
+                return Forbid();
+            }
             if (file == null || file.Length == 0)
             {
                 return BadRequest(new { message = "Fayl seçilməyib və ya boşdur." });
             }
 
-            if (!file.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) &&
-                !Path.GetExtension(file.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            var ext = Path.GetExtension(file.FileName);
+            var isPdf = (file.ContentType ?? "").Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                        || ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+            if (!isPdf)
             {
                 return BadRequest(new { message = "Yalnız PDF formatında fayllar qəbul edilir." });
             }
@@ -131,14 +139,6 @@ namespace Exam.Controllers
             }
 
             return Ok(updated);
-        }
-
-        [HttpPost("{id}/pdf-pack")]
-        [Authorize(Roles = "Teacher,Admin")]
-        [RequestSizeLimit(52_428_800)]
-        public async Task<IActionResult> UploadPdfPack(int id, IFormFile file, [FromForm] int questionCount)
-        {
-            return await UploadExamPdf(id, file, questionCount);
         }
 
         // PUT: api/exams/5
@@ -162,6 +162,7 @@ namespace Exam.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteExam(int id)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             var isDeleted = await _examService.DeleteExamAsync(id);
 
             if (!isDeleted)
@@ -173,9 +174,9 @@ namespace Exam.Controllers
         }
 
         [HttpPost("{id}/questions")]
-        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> AddQuestion(int id, [FromBody] CreateQuestionDto dto)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 

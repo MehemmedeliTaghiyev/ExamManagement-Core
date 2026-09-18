@@ -4,6 +4,9 @@ namespace Exam.Core.DTOs.Exam
     {
         public int QuestionId { get; set; }
         public string CorrectLetter { get; set; } = "A";
+        public string? CorrectText { get; set; }
+        public string? InputKind { get; set; }
+        public string? Type { get; set; }
     }
 
     public class AnswerKeyDto

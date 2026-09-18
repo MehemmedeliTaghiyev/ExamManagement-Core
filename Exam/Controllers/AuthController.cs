@@ -21,11 +21,18 @@ namespace Exam.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> Register([FromBody] RegisterRequestDto dto)
         {
-            var result = await _authService.RegisterAsync(dto);
-            if (result == null)
-                return BadRequest(new { message = "Email is already registered." });
+            try
+            {
+                var result = await _authService.RegisterAsync(dto);
+                if (result == null)
+                    return BadRequest(new { message = "Bu e-poçt artıq qeydiyyatdadır." });
 
-            return Ok(result);
+                return Ok(result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message == "STUDENT_VIA_TEACHER")
+            {
+                return BadRequest(new { message = "Tələbəni yalnız müəllim qeydiyyata sala bilər." });
+            }
         }
 
         [HttpPost("login")]
@@ -40,12 +47,15 @@ namespace Exam.Controllers
 
                 return Ok(result);
             }
-            catch (InvalidOperationException ex) when (ex.Message == "ACCESS_CLOSED")
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("ACCESS_CLOSED"))
             {
+                var msg = ex.Message.StartsWith("ACCESS_CLOSED|")
+                    ? ex.Message["ACCESS_CLOSED|".Length..]
+                    : "Hesabınız bağlanıb. Giriş üçün adminə müraciət edin.";
                 return StatusCode(StatusCodes.Status403Forbidden, new
                 {
                     code = "ACCESS_CLOSED",
-                    message = "Hesabınız bağlanıb. Giriş üçün adminə müraciət edin."
+                    message = msg
                 });
             }
         }

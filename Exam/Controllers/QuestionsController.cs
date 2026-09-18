@@ -16,12 +16,14 @@ namespace Exam.Controllers
         private readonly IQuestionService _questionService;
         private readonly IExamService _examService;
         private readonly ExamDbContext _context;
+        private readonly CurrentTenant _tenant;
 
-        public QuestionsController(IQuestionService questionService, IExamService examService, ExamDbContext context)
+        public QuestionsController(IQuestionService questionService, IExamService examService, ExamDbContext context, CurrentTenant tenant)
         {
             _questionService = questionService;
             _examService = examService;
             _context = context;
+            _tenant = tenant;
         }
 
         [HttpGet("exam/{examId}")]
@@ -29,6 +31,10 @@ namespace Exam.Controllers
         {
             await _examService.SyncExamStatusesAsync();
             var exam = await _context.Exams.AsNoTracking().FirstOrDefaultAsync(e => e.Id == examId);
+            if (!_tenant.CanAccessExam(exam))
+            {
+                return NotFound(new { message = "İmtahan tapılmadı." });
+            }
             var examEnded = exam != null && (exam.Status == ExamStatus.Finished || (exam.EndTime.Year >= 2000 && exam.EndTime <= DateTime.UtcNow));
             var examLive = exam != null && exam.Status == ExamStatus.Live && !examEnded
                 && (exam.StartTime.Year < 2000 || exam.StartTime <= DateTime.UtcNow);
@@ -44,6 +50,7 @@ namespace Exam.Controllers
             {
                 foreach (var question in questions)
                 {
+                    question.CorrectText = null;
                     foreach (var option in question.Options)
                     {
                         option.IsCorrect = false;
@@ -55,9 +62,9 @@ namespace Exam.Controllers
         }
 
         [HttpPost("exam/{examId}")]
-        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> Create(int examId, [FromBody] CreateQuestionDto dto)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             var question = await _questionService.CreateQuestionAsync(examId, dto);
             var list = await _questionService.GetQuestionsByExamIdAsync(examId);
             var created = list.FirstOrDefault(q => q.Id == question.Id) ?? list.LastOrDefault();
@@ -65,18 +72,18 @@ namespace Exam.Controllers
         }
 
         [HttpPut("exam/{examId}/answer-key")]
-        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> SetAnswerKey(int examId, [FromBody] AnswerKeyDto dto)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             await _questionService.SetCorrectLettersAsync(examId, dto.Answers ?? new List<AnswerKeyItemDto>());
             var list = await _questionService.GetQuestionsByExamIdAsync(examId);
             return Ok(list);
         }
 
         [HttpGet("exam/{examId}/difficulty")]
-        [Authorize(Roles = "Teacher,Admin")]
         public async Task<IActionResult> GetDifficulty(int examId)
         {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
             await _examService.SyncExamStatusesAsync();
             var list = await _questionService.GetQuestionDifficultyAsync(examId);
             return Ok(list);

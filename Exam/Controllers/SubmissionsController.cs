@@ -2,6 +2,7 @@
 using System.Security.Claims;
 using Exam.Core.DTOs.Submission;
 using Exam.Core.Interfaces;
+using Exam.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -135,7 +136,7 @@ namespace Exam.Controllers
             return Ok(history);
         }
 
-        private bool IsStaff() => User.IsInRole("Teacher") || User.IsInRole("Admin");
+        private bool IsStaff() => RoleClaims.IsAdmin(User) || RoleClaims.IsTeacher(User);
 
         private int? GetUserId()
         {

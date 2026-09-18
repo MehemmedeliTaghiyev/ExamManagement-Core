@@ -1,0 +1,15 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=sql5111.site4now.net;Database=db_ace530_exam;User Id=db_ace530_exam_admin;Password=YOUR_PASSWORD;TrustServerCertificate=True;MultipleActiveResultSets=true;Encrypt=True"
+  },
+  "JwtSettings": {
+    "Secret": "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS",
+    "Issuer": "ExamApi",
+    "Audience": "ExamClient",
+    "ExpiryInMinutes": 120
+  },
+  "FileStorage": {
+    "Provider": "Local",
+    "PublicBaseUrl": "https://mahammadali-001.site1.tempuri.com"
+  }
+}

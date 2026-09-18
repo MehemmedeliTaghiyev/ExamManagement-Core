@@ -2,6 +2,7 @@
 using Exam.Core.DTOs.Submission;
 using Exam.Core.Enums;
 using Exam.Core.Interfaces;
+using Exam.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 namespace Exam.Infrastructure.Services
@@ -9,10 +10,12 @@ namespace Exam.Infrastructure.Services
     public class SubmissionService : ISubmissionService
     {
         private readonly ExamDbContext _context;
+        private readonly CurrentTenant _tenant;
 
-        public SubmissionService(ExamDbContext context)
+        public SubmissionService(ExamDbContext context, CurrentTenant tenant)
         {
             _context = context;
+            _tenant = tenant;
         }
 
         public async Task<StartExamResponseDto> StartExamAsync(StartExamDto dto)
@@ -27,6 +30,16 @@ namespace Exam.Infrastructure.Services
             if (exam == null)
             {
                 throw new KeyNotFoundException($"ID-si {dto.ExamId} olan imtahan tapılmadı.");
+            }
+
+            if (!_tenant.CanAccessExam(exam))
+            {
+                throw new InvalidOperationException("Bu imtahan sizin müəlliminizə aid deyil.");
+            }
+
+            if (exam.Status == ExamStatus.Draft)
+            {
+                throw new InvalidOperationException("İmtahan hələ dərc olunmayıb.");
             }
 
             var start = exam.StartTime.Kind == DateTimeKind.Unspecified
@@ -122,12 +135,13 @@ namespace Exam.Infrastructure.Services
             _context.StudentAnswers.RemoveRange(previous);
 
             var rows = (dto.Answers ?? new List<StudentAnswerDto>())
-                .Where(a => a.QuestionId > 0 && a.SelectedOptionId > 0)
+                .Where(a => a.QuestionId > 0 && ((a.SelectedOptionId ?? 0) > 0 || !string.IsNullOrWhiteSpace(a.TextAnswer)))
                 .Select(a => new StudentAnswer
                 {
                     StudentExamId = studentExam.Id,
                     QuestionId = a.QuestionId,
-                    SelectedOptionId = a.SelectedOptionId
+                    SelectedOptionId = (a.SelectedOptionId ?? 0) > 0 ? a.SelectedOptionId : null,
+                    TextAnswer = a.TextAnswer
                 })
                 .ToList();
 
@@ -158,11 +172,12 @@ namespace Exam.Infrastructure.Services
                 if (exam == null || !IsExamEnded(exam)) continue;
 
                 var saved = await _context.StudentAnswers
-                    .Where(a => a.StudentExamId == session.Id && a.SelectedOptionId != null)
+                    .Where(a => a.StudentExamId == session.Id)
                     .Select(a => new StudentAnswerDto
                     {
                         QuestionId = a.QuestionId,
-                        SelectedOptionId = a.SelectedOptionId!.Value
+                        SelectedOptionId = a.SelectedOptionId,
+                        TextAnswer = a.TextAnswer
                     })
                     .ToListAsync();
 
@@ -184,18 +199,30 @@ namespace Exam.Infrastructure.Services
                     .ToListAsync();
 
             var userAnswers = new Dictionary<int, int>();
+            var userTexts = new Dictionary<int, string>();
             var alreadySaved = await _context.StudentAnswers
-                .Where(a => a.StudentExamId == studentExam.Id && a.SelectedOptionId != null)
+                .Where(a => a.StudentExamId == studentExam.Id)
                 .ToListAsync();
             foreach (var saved in alreadySaved)
             {
-                userAnswers[saved.QuestionId] = saved.SelectedOptionId!.Value;
+                if (saved.SelectedOptionId.HasValue && saved.SelectedOptionId.Value > 0)
+                {
+                    userAnswers[saved.QuestionId] = saved.SelectedOptionId.Value;
+                }
+                if (!string.IsNullOrWhiteSpace(saved.TextAnswer))
+                {
+                    userTexts[saved.QuestionId] = saved.TextAnswer;
+                }
             }
             foreach (var answer in answers)
             {
-                if (answer.QuestionId > 0 && answer.SelectedOptionId > 0)
+                if (answer.QuestionId > 0 && (answer.SelectedOptionId ?? 0) > 0)
                 {
-                    userAnswers[answer.QuestionId] = answer.SelectedOptionId;
+                    userAnswers[answer.QuestionId] = answer.SelectedOptionId!.Value;
+                }
+                if (answer.QuestionId > 0 && !string.IsNullOrWhiteSpace(answer.TextAnswer))
+                {
+                    userTexts[answer.QuestionId] = answer.TextAnswer!;
                 }
             }
 
@@ -207,18 +234,35 @@ namespace Exam.Infrastructure.Services
             {
                 var options = allOptions.Where(o => o.QuestionId == question.Id).ToList();
                 int? selectedOptionId = userAnswers.TryGetValue(question.Id, out int optionId) ? optionId : null;
+                userTexts.TryGetValue(question.Id, out var textAnswer);
                 var selected = options.FirstOrDefault(o => o.Id == selectedOptionId);
                 var correct = options.FirstOrDefault(o => o.IsCorrect);
-                bool isCorrect = selected != null && (selected.IsCorrect || (correct != null && selected.Id == correct.Id));
+                var isOpen = question.Type == QuestionType.OpenEnded
+                    || (!string.IsNullOrWhiteSpace(question.InputKind)
+                        && !question.InputKind.Equals("Choice", StringComparison.OrdinalIgnoreCase));
+
+                bool isCorrect;
+                bool isUnanswered;
+                if (isOpen)
+                {
+                    isUnanswered = string.IsNullOrWhiteSpace(textAnswer);
+                    isCorrect = QuestionService.TextMatches(textAnswer, question.CorrectText, question.InputKind);
+                }
+                else
+                {
+                    isUnanswered = !selectedOptionId.HasValue;
+                    isCorrect = selected != null && (selected.IsCorrect || (correct != null && selected.Id == correct.Id));
+                }
 
                 if (isCorrect) correctCount++;
-                if (!selectedOptionId.HasValue) unanswered++;
+                if (isUnanswered) unanswered++;
 
                 studentAnswersList.Add(new StudentAnswer
                 {
                     StudentExamId = studentExam.Id,
                     QuestionId = question.Id,
-                    SelectedOptionId = selectedOptionId
+                    SelectedOptionId = selectedOptionId,
+                    TextAnswer = textAnswer
                 });
             }
 
@@ -263,11 +307,15 @@ namespace Exam.Infrastructure.Services
         {
             await FinalizeExpiredSessionsAsync(studentId);
             return await GetExamSubmissionsAsyncInternal(se =>
-                se.StudentId == studentId && se.Status != StudentExamStatus.InProgress);
+                se.StudentId == studentId
+                && se.Status != StudentExamStatus.InProgress
+                && _context.Exams.Any(e => e.Id == se.ExamId && (_tenant.IsAdmin || e.TeacherId == _tenant.TeacherScopeId)));
         }
 
         public async Task<IReadOnlyList<ExamResultDto>> GetExamSubmissionsAsync(int examId)
         {
+            var exam = await _context.Exams.FindAsync(examId);
+            if (!_tenant.CanAccessExam(exam)) return Array.Empty<ExamResultDto>();
             return await GetExamSubmissionsAsyncInternal(se =>
                 se.ExamId == examId && se.Status != StudentExamStatus.InProgress);
         }
@@ -277,6 +325,8 @@ namespace Exam.Infrastructure.Services
             var studentExam = await _context.StudentExams.FirstOrDefaultAsync(se => se.Id == studentExamId);
             if (studentExam == null) return null;
             if (!isStaff && studentExam.StudentId != requesterId) return null;
+            var examForReview = await _context.Exams.FindAsync(studentExam.ExamId);
+            if (!_tenant.CanAccessExam(examForReview)) return null;
 
             await FinalizeExpiredSessionsAsync(studentExam.StudentId, studentExam.ExamId);
             studentExam = await _context.StudentExams.FirstOrDefaultAsync(se => se.Id == studentExamId);
@@ -288,6 +338,8 @@ namespace Exam.Infrastructure.Services
         public async Task<ExamReviewDto?> GetExamReviewByExamAsync(int examId, int requesterId, bool isStaff)
         {
             await FinalizeExpiredSessionsAsync(isStaff ? null : requesterId, examId);
+            var examGate = await _context.Exams.FirstOrDefaultAsync(e => e.Id == examId);
+            if (!_tenant.CanAccessExam(examGate)) return null;
 
             if (isStaff)
             {
@@ -392,7 +444,12 @@ namespace Exam.Infrastructure.Services
                 var saved = answers.FirstOrDefault(a => a.QuestionId == q.Id);
                 var correct = qOptions.FirstOrDefault(o => o.IsCorrect);
                 var selectedOpt = qOptions.FirstOrDefault(o => o.Id == saved?.SelectedOptionId);
-                var isCorrect = selectedOpt != null && (selectedOpt.IsCorrect || (correct != null && selectedOpt.Id == correct.Id));
+                var isOpen = q.Type == QuestionType.OpenEnded
+                    || (!string.IsNullOrWhiteSpace(q.InputKind)
+                        && !q.InputKind.Equals("Choice", StringComparison.OrdinalIgnoreCase));
+                var isCorrect = isOpen
+                    ? QuestionService.TextMatches(saved?.TextAnswer, q.CorrectText, q.InputKind)
+                    : selectedOpt != null && (selectedOpt.IsCorrect || (correct != null && selectedOpt.Id == correct.Id));
 
                 return new QuestionReviewDto
                 {
@@ -400,11 +457,11 @@ namespace Exam.Infrastructure.Services
                     Index = idx + 1,
                     Text = q.Text,
                     SelectedOptionId = saved?.SelectedOptionId,
-                    SelectedText = selectedOpt?.OptionText,
+                    SelectedText = isOpen ? saved?.TextAnswer : selectedOpt?.OptionText,
                     CorrectOptionId = correct?.Id,
-                    CorrectText = correct?.OptionText,
+                    CorrectText = isOpen ? q.CorrectText : correct?.OptionText,
                     IsCorrect = isCorrect,
-                    Unanswered = saved?.SelectedOptionId == null,
+                    Unanswered = isOpen ? string.IsNullOrWhiteSpace(saved?.TextAnswer) : saved?.SelectedOptionId == null,
                     Options = qOptions.Select(o => new QuestionOptionReviewDto
                     {
                         Id = o.Id,

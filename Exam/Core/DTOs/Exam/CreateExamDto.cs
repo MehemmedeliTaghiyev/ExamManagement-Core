@@ -17,10 +17,12 @@ namespace Exam.Core.DTOs.Exam
         [Range(1, 200, ErrorMessage = "Sual sayı 1 ilə 200 arasında olmalıdır.")]
         public int TotalQuestions { get; set; }
 
-        [Required(ErrorMessage = "Başlama tarixi mütləqdir.")]
         public DateTime StartTime { get; set; }
 
-        [Required(ErrorMessage = "Bitmə tarixi mütləqdir.")]
         public DateTime EndTime { get; set; }
+
+        public bool IsDraft { get; set; }
+
+        public string? Status { get; set; }
     }
 }

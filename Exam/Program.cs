@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Exam.Core.Interfaces;
 using Exam.Infrastructure;
 using Exam.Infrastructure.Filters;
@@ -40,13 +41,23 @@ builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IExamService, ExamService>();
 builder.Services.AddScoped<ISubmissionService, SubmissionService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<CurrentTenant>();
 builder.Services.AddScoped<IQuestionService, QuestionService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<IAdminNotificationService, AdminNotificationService>();
+builder.Services.AddHostedService<TrialReminderHostedService>();
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 builder.Services.AddScoped<EnsureUserAccessFilter>();
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = 52_428_800;
+    options.ValueLengthLimit = 52_428_800;
+});
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 52_428_800;
 });
 
 builder.Services.AddDbContext<ExamDbContext>(options =>
@@ -70,6 +81,8 @@ builder.Services.AddAuthentication(options =>
         ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
+        RoleClaimType = ClaimTypes.Role,
+        NameClaimType = ClaimTypes.Name,
         ValidIssuer = jwtSettings["Issuer"] ?? "ExamApi",
         ValidAudience = jwtSettings["Audience"] ?? "ExamClient",
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
@@ -115,21 +128,38 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ExamDbContext>();
-    try
+    try { db.Database.EnsureCreated(); }
+    catch { /* host may not allow EnsureCreated; import SQL instead */ }
+    void TrySql(string sql)
     {
-        db.Database.ExecuteSqlRaw(@"
-IF COL_LENGTH('Users', 'IsDeleted') IS NULL
-    ALTER TABLE Users ADD IsDeleted bit NOT NULL CONSTRAINT DF_Users_IsDeleted DEFAULT(0);
-IF COL_LENGTH('Users', 'DeletedAt') IS NULL
-    ALTER TABLE Users ADD DeletedAt datetime2 NULL;
-IF COL_LENGTH('Users', 'IsAccessEnabled') IS NULL
-    ALTER TABLE Users ADD IsAccessEnabled bit NOT NULL CONSTRAINT DF_Users_IsAccessEnabled DEFAULT(1);
+        try { db.Database.ExecuteSqlRaw(sql); }
+        catch { /* column/index may already exist, or table not created yet */ }
+    }
+
+    TrySql("IF COL_LENGTH('Users', 'IsDeleted') IS NULL ALTER TABLE Users ADD IsDeleted bit NOT NULL CONSTRAINT DF_Users_IsDeleted DEFAULT(0);");
+    TrySql("IF COL_LENGTH('Users', 'DeletedAt') IS NULL ALTER TABLE Users ADD DeletedAt datetime2 NULL;");
+    TrySql("IF COL_LENGTH('Users', 'IsAccessEnabled') IS NULL ALTER TABLE Users ADD IsAccessEnabled bit NOT NULL CONSTRAINT DF_Users_IsAccessEnabled DEFAULT(1);");
+    TrySql("IF COL_LENGTH('Users', 'TeacherId') IS NULL ALTER TABLE Users ADD TeacherId int NULL;");
+    TrySql("IF COL_LENGTH('Users', 'UserName') IS NULL ALTER TABLE Users ADD UserName nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'GroupName') IS NULL ALTER TABLE Users ADD GroupName nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'FirstName') IS NULL ALTER TABLE Users ADD FirstName nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'LastName') IS NULL ALTER TABLE Users ADD LastName nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'Phone') IS NULL ALTER TABLE Users ADD Phone nvarchar(40) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'TrialEndsAt') IS NULL ALTER TABLE Users ADD TrialEndsAt datetime2 NULL;");
+    TrySql("IF COL_LENGTH('Users', 'TrialMessage') IS NULL ALTER TABLE Users ADD TrialMessage nvarchar(1000) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'TrialNotifiedAt') IS NULL ALTER TABLE Users ADD TrialNotifiedAt datetime2 NULL;");
+    TrySql("IF COL_LENGTH('Exams', 'TeacherId') IS NULL ALTER TABLE Exams ADD TeacherId int NULL;");
+    TrySql("IF COL_LENGTH('Questions', 'InputKind') IS NULL ALTER TABLE Questions ADD InputKind nvarchar(20) NOT NULL CONSTRAINT DF_Questions_InputKind DEFAULT('Choice');");
+    TrySql("IF COL_LENGTH('Questions', 'CorrectText') IS NULL ALTER TABLE Questions ADD CorrectText nvarchar(500) NULL;");
+    TrySql(@"
+IF COL_LENGTH('Users', 'UserName') IS NOT NULL
+AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_Users_UserName' AND object_id = OBJECT_ID('Users'))
+AND NOT EXISTS (
+    SELECT UserName FROM Users
+    WHERE UserName IS NOT NULL AND UserName <> N''
+    GROUP BY UserName HAVING COUNT(*) > 1)
+    CREATE UNIQUE INDEX UX_Users_UserName ON Users(UserName) WHERE UserName IS NOT NULL AND UserName <> N'';
 ");
-    }
-    catch
-    {
-        /* table may not exist yet */
-    }
 }
 
 Directory.CreateDirectory(Path.Combine(app.Environment.ContentRootPath, "wwwroot"));
@@ -153,6 +183,7 @@ app.UseStaticFiles(new StaticFileOptions
         }
     }
 });
+app.UseCors("AllowReactApp");
 app.UseRouting();
 app.UseCors("AllowReactApp");
 app.UseAuthentication();

@@ -37,6 +37,23 @@ namespace Exam.Infrastructure.Configurations
                 .HasDefaultValue(false);
 
             builder.HasQueryFilter(u => !u.IsDeleted);
+
+            builder.Property(u => u.UserName)
+                .HasMaxLength(80);
+
+            builder.HasIndex(u => u.UserName)
+                .IsUnique()
+                .HasFilter("[UserName] IS NOT NULL AND [UserName] <> N''");
+
+            builder.Property(u => u.GroupName)
+                .HasMaxLength(80);
+
+            builder.Property(u => u.FirstName).HasMaxLength(80);
+            builder.Property(u => u.LastName).HasMaxLength(80);
+            builder.Property(u => u.Phone).HasMaxLength(40);
+            builder.Property(u => u.TrialMessage).HasMaxLength(1000);
+
+            builder.HasIndex(u => u.TeacherId);
         }
     }
 }

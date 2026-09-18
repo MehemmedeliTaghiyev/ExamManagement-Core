@@ -25,6 +25,13 @@ namespace Exam.Infrastructure.Configurations
                 .HasMaxLength(20)
                 .IsRequired();
 
+            builder.Property(q => q.InputKind)
+                .HasMaxLength(20)
+                .HasDefaultValue("Choice");
+
+            builder.Property(q => q.CorrectText)
+                .HasMaxLength(500);
+
             // ID-only Foreign Key to Exam (int to int)
             builder.HasOne<Exam.Core.Domain.Exam>()
                 .WithMany()

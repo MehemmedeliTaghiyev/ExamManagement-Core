@@ -25,21 +25,20 @@ namespace Exam.Infrastructure.Filters
                 return;
             }
 
-            if (context.HttpContext.User.IsInRole("Admin"))
+            if (RoleClaims.IsAdmin(context.HttpContext.User))
             {
                 await next();
                 return;
             }
 
-            var raw = context.HttpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)
-                      ?? context.HttpContext.User.FindFirstValue(JwtRegisteredClaimNames.Sub);
-            if (!int.TryParse(raw, out var userId) || userId <= 0)
+            var userId = RoleClaims.UserId(context.HttpContext.User);
+            if (userId is null or <= 0)
             {
                 await next();
                 return;
             }
 
-            var allowed = await _users.IsAccessAllowedAsync(userId);
+            var allowed = await _users.IsAccessAllowedAsync(userId.Value);
             if (!allowed)
             {
                 context.Result = new ObjectResult(new

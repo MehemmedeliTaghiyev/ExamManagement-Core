@@ -18,6 +18,8 @@ namespace Exam.Infrastructure.Configurations
                 .WithMany()
                 .HasForeignKey(e => e.SubjectId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            builder.HasIndex(e => e.TeacherId);
         }
     }
 }
