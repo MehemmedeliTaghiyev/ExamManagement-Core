@@ -1,4 +1,6 @@
 ﻿using Exam.Core.DTOs.Exam;
+using Exam.Core.DTOs.QuestionBank;
+using Exam.Core.Exceptions;
 using Exam.Core.Interfaces;
 using Exam.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
@@ -15,11 +17,13 @@ namespace Exam.Controllers
     {
         private readonly IExamService _examService;
         private readonly IFileStorage _files;
+        private readonly IQuestionBankService _questionBank;
 
-        public ExamsController(IExamService examService, IFileStorage files)
+        public ExamsController(IExamService examService, IFileStorage files, IQuestionBankService questionBank)
         {
             _examService = examService;
             _files = files;
+            _questionBank = questionBank;
         }
 
         [HttpGet("{id:int}/pdf")]
@@ -171,6 +175,25 @@ namespace Exam.Controllers
             }
 
             return Ok(new { message = "İmtahan uğurla silindi." });
+        }
+
+        [HttpPost("{id:int}/from-bank")]
+        public async Task<IActionResult> FromBank(int id, [FromBody] FromBankRequestDto? quota)
+        {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
+            try
+            {
+                var result = await _questionBank.CopyFromBankAsync(id, quota ?? new FromBankRequestDto());
+                return Ok(result);
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+            }
+            catch (FromBankConflictException ex)
+            {
+                return Conflict(new { code = "FROM_BANK_CONFLICT", message = ex.Message });
+            }
         }
 
         [HttpPost("{id}/questions")]

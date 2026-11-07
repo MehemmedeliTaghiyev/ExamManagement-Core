@@ -44,6 +44,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<CurrentTenant>();
 builder.Services.AddScoped<IQuestionService, QuestionService>();
+builder.Services.AddScoped<IQuestionBankService, QuestionBankService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IAdminNotificationService, AdminNotificationService>();
@@ -151,6 +152,9 @@ using (var scope = app.Services.CreateScope())
     TrySql("IF COL_LENGTH('Exams', 'TeacherId') IS NULL ALTER TABLE Exams ADD TeacherId int NULL;");
     TrySql("IF COL_LENGTH('Questions', 'InputKind') IS NULL ALTER TABLE Questions ADD InputKind nvarchar(20) NOT NULL CONSTRAINT DF_Questions_InputKind DEFAULT('Choice');");
     TrySql("IF COL_LENGTH('Questions', 'CorrectText') IS NULL ALTER TABLE Questions ADD CorrectText nvarchar(500) NULL;");
+    TrySql("IF COL_LENGTH('Questions', 'FigureUrl') IS NULL ALTER TABLE Questions ADD FigureUrl nvarchar(1000) NULL;");
+    TrySql("IF COL_LENGTH('Questions', 'SourceQnum') IS NULL ALTER TABLE Questions ADD SourceQnum nvarchar(64) NULL;");
+    TrySql("IF COL_LENGTH('QuestionOptions', 'OptionText') IS NOT NULL ALTER TABLE QuestionOptions ALTER COLUMN OptionText nvarchar(max) NOT NULL;");
     TrySql(@"
 IF COL_LENGTH('Users', 'UserName') IS NOT NULL
 AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_Users_UserName' AND object_id = OBJECT_ID('Users'))

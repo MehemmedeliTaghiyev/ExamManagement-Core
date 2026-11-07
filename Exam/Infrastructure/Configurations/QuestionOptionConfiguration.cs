@@ -10,7 +10,7 @@ namespace Exam.Infrastructure.Configurations
         {
             builder.ToTable("QuestionOptions");
             builder.HasKey(o => o.Id);
-            builder.Property(o => o.OptionText).IsRequired().HasMaxLength(500);
+            builder.Property(o => o.OptionText).IsRequired().HasColumnType("nvarchar(max)");
 
             builder.HasOne<Question>()
                 .WithMany()

@@ -32,6 +32,12 @@ namespace Exam.Infrastructure.Configurations
             builder.Property(q => q.CorrectText)
                 .HasMaxLength(500);
 
+            builder.Property(q => q.FigureUrl)
+                .HasMaxLength(1000);
+
+            builder.Property(q => q.SourceQnum)
+                .HasMaxLength(64);
+
             // ID-only Foreign Key to Exam (int to int)
             builder.HasOne<Exam.Core.Domain.Exam>()
                 .WithMany()
