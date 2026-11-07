@@ -42,6 +42,8 @@ namespace Exam.Infrastructure.Services
                     ? (q.Type == QuestionType.OpenEnded ? "Text" : "Choice")
                     : q.InputKind,
                 CorrectText = q.CorrectText,
+                FigureUrl = q.FigureUrl,
+                SourceQnum = q.SourceQnum,
                 Options = options
                     .Where(o => o.QuestionId == q.Id)
                     .Select(o => new QuestionOptionResponseDto

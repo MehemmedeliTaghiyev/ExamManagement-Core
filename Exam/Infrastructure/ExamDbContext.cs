@@ -11,6 +11,8 @@ namespace Exam.Infrastructure
         public DbSet<Exam.Core.Domain.Exam> Exams => Set<Exam.Core.Domain.Exam>();
         public DbSet<Question> Questions => Set<Question>();
         public DbSet<QuestionOption> QuestionOptions => Set<QuestionOption>();
+        public DbSet<QuestionBank> QuestionBank => Set<QuestionBank>();
+        public DbSet<QuestionBankOption> QuestionBankOptions => Set<QuestionBankOption>();
         public DbSet<StudentExam> StudentExams => Set<StudentExam>();
         public DbSet<StudentAnswer> StudentAnswers => Set<StudentAnswer>();
         public ExamDbContext(DbContextOptions options) : base(options)

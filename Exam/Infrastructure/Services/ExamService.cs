@@ -486,6 +486,8 @@ namespace Exam.Infrastructure.Services
                 Type = question.Type,
                 InputKind = question.InputKind,
                 CorrectText = question.CorrectText,
+                FigureUrl = question.FigureUrl,
+                SourceQnum = question.SourceQnum,
                 Options = optionsList.Select(o => new QuestionOptionResponseDto
                 {
                     Id = o.Id,

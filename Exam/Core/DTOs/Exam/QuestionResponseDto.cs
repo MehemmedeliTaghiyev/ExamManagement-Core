@@ -11,6 +11,8 @@ namespace Exam.Core.DTOs.Exam
         public QuestionType Type { get; set; }
         public string InputKind { get; set; } = "Choice";
         public string? CorrectText { get; set; }
+        public string? FigureUrl { get; set; }
+        public string? SourceQnum { get; set; }
         public List<QuestionOptionResponseDto> Options { get; set; } = new();
     }
 }

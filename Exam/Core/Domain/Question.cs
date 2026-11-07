@@ -11,5 +11,7 @@ namespace Exam.Core.Domain
         public QuestionType Type { get; set; } = QuestionType.SingleChoice;
         public string InputKind { get; set; } = "Choice";
         public string? CorrectText { get; set; }
+        public string? FigureUrl { get; set; }
+        public string? SourceQnum { get; set; }
     }
 }
