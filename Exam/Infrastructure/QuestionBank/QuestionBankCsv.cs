@@ -72,7 +72,7 @@ namespace Exam.Infrastructure.Banking
                 Line = lineNo,
                 Entity = new QuestionBank
                 {
-                    Qnum = qnum.Trim(),
+                    Qnum = NormalizeQnum(qnum),
                     Text = text,
                     Type = type,
                     InputKind = inputKind,
@@ -81,7 +81,7 @@ namespace Exam.Infrastructure.Banking
                     Points = points,
                     Grade = Trunc(grade, 8),
                     Subject = Trunc(subject, 32),
-                    Audience = NormalizeAudience(audience),
+                    Audience = PaperQuotas.NormalizeAudience(audience),
                     MainTopic = Trunc(topic, 200),
                     Language = Trunc(NormalizeLanguage(language), 8),
                     SituationId = Trunc(situationId, 64),
@@ -228,15 +228,8 @@ namespace Exam.Infrastructure.Banking
             return 1;
         }
 
-        private static string? NormalizeAudience(string audience)
-        {
-            if (string.IsNullOrWhiteSpace(audience)) return null;
-            var a = audience.Trim().ToLowerInvariant();
-            if (a is "weekly" or "teacher" or "specialty") return a;
-            if (a is "sinaq" or "sınaq") return "weekly";
-            if (a is "blok" or "block") return "specialty";
-            return Trunc(a, 20);
-        }
+        internal static string NormalizeQnum(string qnum) =>
+            string.IsNullOrWhiteSpace(qnum) ? "" : qnum.Trim().ToUpperInvariant();
 
         private static string NormalizeLanguage(string language)
         {

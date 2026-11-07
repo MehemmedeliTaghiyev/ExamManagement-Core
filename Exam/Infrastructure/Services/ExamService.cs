@@ -477,7 +477,7 @@ namespace Exam.Infrastructure.Services
             }
 
             // 3. Return response payload
-            return new QuestionResponseDto
+            var response = new QuestionResponseDto
             {
                 Id = question.Id,
                 ExamId = question.ExamId,
@@ -486,7 +486,6 @@ namespace Exam.Infrastructure.Services
                 Type = question.Type,
                 InputKind = question.InputKind,
                 CorrectText = question.CorrectText,
-                FigureUrl = question.FigureUrl,
                 SourceQnum = question.SourceQnum,
                 Options = optionsList.Select(o => new QuestionOptionResponseDto
                 {
@@ -496,6 +495,8 @@ namespace Exam.Infrastructure.Services
                     IsCorrect = o.IsCorrect
                 }).ToList()
             };
+            response.AttachFigure(question.FigureUrl);
+            return response;
         }
 
     }

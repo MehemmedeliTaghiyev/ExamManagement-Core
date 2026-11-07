@@ -31,29 +31,33 @@ namespace Exam.Infrastructure.Services
                 .Where(o => questionIds.Contains(o.QuestionId))
                 .ToListAsync();
 
-            return questions.Select(q => new QuestionResponseDto
+            return questions.Select(q =>
             {
-                Id = q.Id,
-                ExamId = q.ExamId,
-                Text = q.Text,
-                Points = q.Points,
-                Type = q.Type,
-                InputKind = string.IsNullOrWhiteSpace(q.InputKind)
-                    ? (q.Type == QuestionType.OpenEnded ? "Text" : "Choice")
-                    : q.InputKind,
-                CorrectText = q.CorrectText,
-                FigureUrl = q.FigureUrl,
-                SourceQnum = q.SourceQnum,
-                Options = options
-                    .Where(o => o.QuestionId == q.Id)
-                    .Select(o => new QuestionOptionResponseDto
-                    {
-                        Id = o.Id,
-                        QuestionId = o.QuestionId,
-                        OptionText = o.OptionText,
-                        IsCorrect = o.IsCorrect
-                    })
-                    .ToList()
+                var dto = new QuestionResponseDto
+                {
+                    Id = q.Id,
+                    ExamId = q.ExamId,
+                    Text = q.Text,
+                    Points = q.Points,
+                    Type = q.Type,
+                    InputKind = string.IsNullOrWhiteSpace(q.InputKind)
+                        ? (q.Type == QuestionType.OpenEnded ? "Text" : "Choice")
+                        : q.InputKind,
+                    CorrectText = q.CorrectText,
+                    SourceQnum = q.SourceQnum,
+                    Options = options
+                        .Where(o => o.QuestionId == q.Id)
+                        .Select(o => new QuestionOptionResponseDto
+                        {
+                            Id = o.Id,
+                            QuestionId = o.QuestionId,
+                            OptionText = o.OptionText,
+                            IsCorrect = o.IsCorrect
+                        })
+                        .ToList()
+                };
+                dto.AttachFigure(q.FigureUrl);
+                return dto;
             }).ToList();
         }
 

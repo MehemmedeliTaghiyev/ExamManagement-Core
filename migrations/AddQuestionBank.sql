@@ -1,5 +1,6 @@
 ﻿-- AddQuestionBank (EF Core 9, idempotent)
 -- SmarterASP: SQL Manager -> db_ace530_exam -> New Query -> paste this file -> Execute.
+-- Required together with publishing/redeploying the API. SQL alone or publish alone is not enough.
 -- Run once before relying on QuestionBank APIs. Does not modify existing exam question rows.
 -- Do not use SQLite dump/restore.
 

@@ -1,5 +1,6 @@
 ﻿using Exam.Core.DTOs.Exam;
 using Exam.Core.DTOs.QuestionBank;
+using Exam.Core.Exceptions;
 using Exam.Core.Interfaces;
 using Exam.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
@@ -188,6 +189,10 @@ namespace Exam.Controllers
             catch (KeyNotFoundException)
             {
                 return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+            }
+            catch (FromBankConflictException ex)
+            {
+                return Conflict(new { code = "FROM_BANK_CONFLICT", message = ex.Message });
             }
         }
 

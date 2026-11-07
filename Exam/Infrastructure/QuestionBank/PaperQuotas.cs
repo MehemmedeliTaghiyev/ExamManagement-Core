@@ -13,12 +13,13 @@ namespace Exam.Infrastructure.Banking
     public static class PaperQuotas
     {
         // Rəsmi buraxılış / blok sayları (kind məlum olanda default).
+        // Grade 9 buraxılış situation (3) is a later ExamPulse change — from-bank is blok-only.
         public static readonly PaperQuota Grade9Buraxilis = new()
         {
             Mcq = 12,
             OpenCoded = 4,
             Written = 6,
-            Situation = 3
+            Situation = 0
         };
 
         public static readonly PaperQuota Grade11Buraxilis = new()
@@ -72,23 +73,48 @@ namespace Exam.Infrastructure.Banking
             return PaperKind.Unknown;
         }
 
-        public static bool AllowSituation(PaperKind kind, string? audience, string? grade)
+        /// <summary>Situation/isbat yalnız specialty (Blok). Buraxılış (o cümlədən 9-cu sinif) yox.</summary>
+        public static bool AllowSituation(PaperKind kind, string? audience, string? grade = null)
         {
-            if (kind is PaperKind.Weekly or PaperKind.Teacher) return false;
-            var a = (audience ?? "").Trim().ToLowerInvariant();
+            _ = grade;
+            if (kind is PaperKind.Weekly or PaperKind.Teacher or PaperKind.Buraxilis) return false;
+            var a = NormalizeAudience(audience);
             if (a is "weekly" or "teacher") return false;
-            if (kind == PaperKind.Blok || a == "specialty") return true;
-            // Grade 9 buraxılış rəsmi kağızında 3 situasiya var.
-            if (kind == PaperKind.Buraxilis && NormalizeGrade(grade) == "9") return true;
-            return false;
+            if (a == "specialty") return true;
+            return kind == PaperKind.Blok && string.IsNullOrWhiteSpace(audience);
         }
 
-        public static bool AllowIsbat(PaperKind kind, string? audience)
+        public static bool AllowIsbat(PaperKind kind, string? audience) =>
+            AllowSituation(kind, audience);
+
+        public static string? NormalizeAudience(string? audience)
         {
-            if (kind is PaperKind.Weekly or PaperKind.Teacher) return false;
-            var a = (audience ?? "").Trim().ToLowerInvariant();
-            if (a is "weekly" or "teacher") return false;
-            return kind == PaperKind.Blok || a == "specialty";
+            if (string.IsNullOrWhiteSpace(audience)) return null;
+            var a = audience.Trim().ToLowerInvariant()
+                .Replace("ı", "i").Replace("ə", "e");
+            if (a is "weekly" or "sinaq" or "sinag") return "weekly";
+            if (a is "teacher" or "muellim") return "teacher";
+            if (a is "specialty" or "blok" or "block") return "specialty";
+            return a;
+        }
+
+        public static string? AudienceFromKind(PaperKind kind) => kind switch
+        {
+            PaperKind.Weekly => "weekly",
+            PaperKind.Teacher => "teacher",
+            PaperKind.Blok => "specialty",
+            _ => null
+        };
+
+        public static bool BankAudienceFits(string? bankAudience, string requested)
+        {
+            var bank = NormalizeAudience(bankAudience);
+            var need = NormalizeAudience(requested) ?? requested.Trim().ToLowerInvariant();
+            if (need is "weekly" or "teacher")
+                return bank == need;
+            if (need == "specialty")
+                return bank is null or "specialty";
+            return bank == need;
         }
     }
 

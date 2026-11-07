@@ -1,6 +1,7 @@
 using Exam.Core.Domain;
 using Exam.Core.DTOs.QuestionBank;
 using Exam.Core.Enums;
+using Exam.Core.Exceptions;
 using Exam.Core.Interfaces;
 using Exam.Infrastructure.Banking;
 using Microsoft.EntityFrameworkCore;
@@ -28,7 +29,7 @@ namespace Exam.Infrastructure.Services
                 return result;
             }
 
-            var qnums = rows.Select(r => r.Entity.Qnum).Where(q => !string.IsNullOrWhiteSpace(q)).Distinct().ToList();
+            var qnums = rows.Select(r => r.Entity.Qnum).Where(q => !string.IsNullOrWhiteSpace(q)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var existing = await _context.QuestionBank
                 .Where(q => qnums.Contains(q.Qnum))
                 .ToListAsync(cancellationToken);
@@ -40,6 +41,7 @@ namespace Exam.Infrastructure.Services
                     .Where(o => existingIds.Contains(o.QuestionBankId))
                     .ToListAsync(cancellationToken);
 
+            var insertedRows = new List<QuestionBankImportRow>();
             foreach (var row in rows)
             {
                 if (string.IsNullOrWhiteSpace(row.Entity.Qnum))
@@ -62,25 +64,27 @@ namespace Exam.Infrastructure.Services
                     var opts = existingOptions.Where(o => o.QuestionBankId == current.Id).ToList();
                     _context.QuestionBankOptions.RemoveRange(opts);
                     foreach (var o in row.Options)
-                    {
                         o.QuestionBankId = current.Id;
-                    }
                     _context.QuestionBankOptions.AddRange(row.Options);
                     result.Updated++;
                 }
                 else
                 {
                     _context.QuestionBank.Add(row.Entity);
-                    await _context.SaveChangesAsync(cancellationToken);
-                    foreach (var o in row.Options)
-                    {
-                        o.QuestionBankId = row.Entity.Id;
-                    }
-                    if (row.Options.Count > 0)
-                        _context.QuestionBankOptions.AddRange(row.Options);
                     existingByQnum[row.Entity.Qnum] = row.Entity;
+                    insertedRows.Add(row);
                     result.Inserted++;
                 }
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+
+            foreach (var row in insertedRows)
+            {
+                foreach (var o in row.Options)
+                    o.QuestionBankId = row.Entity.Id;
+                if (row.Options.Count > 0)
+                    _context.QuestionBankOptions.AddRange(row.Options);
             }
 
             await _context.SaveChangesAsync(cancellationToken);
@@ -95,19 +99,22 @@ namespace Exam.Infrastructure.Services
 
             quota ??= new FromBankRequestDto();
             var kind = PaperQuotas.ParseKind(quota.Kind, quota.Audience);
-            var allowSituation = PaperQuotas.AllowSituation(kind, quota.Audience, quota.Grade);
+            var allowSituation = PaperQuotas.AllowSituation(kind, quota.Audience);
             var allowIsbat = PaperQuotas.AllowIsbat(kind, quota.Audience);
+            var audienceFilter = PaperQuotas.NormalizeAudience(quota.Audience)
+                ?? PaperQuotas.AudienceFromKind(kind);
+
+            await ReplaceOrConflictAsync(examId, cancellationToken);
 
             var paper = ResolveQuota(quota, kind, exam.TotalQuestions);
 
             if (!allowSituation)
-                paper = new PaperQuota { Mcq = paper.Mcq, OpenCoded = paper.OpenCoded, Written = paper.Written, Situation = 0 };
+                paper = new PaperQuota { Mcq = paper.Mcq, OpenCoded = paper.OpenCoded, Written = paper.Written, Situation = 0, FillAny = paper.FillAny };
 
             var query = _context.QuestionBank.AsNoTracking().AsQueryable();
-            if (!string.IsNullOrWhiteSpace(quota.Audience))
+            if (audienceFilter is "weekly" or "teacher")
             {
-                var audience = quota.Audience.Trim();
-                query = query.Where(q => q.Audience == audience || q.Audience == null || q.Audience == "");
+                query = query.Where(q => q.Audience != null && q.Audience != "");
             }
             if (!string.IsNullOrWhiteSpace(quota.Grade))
             {
@@ -138,6 +145,8 @@ namespace Exam.Infrastructure.Services
             }
 
             var pool = await query.ToListAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(audienceFilter))
+                pool = pool.Where(q => PaperQuotas.BankAudienceFits(q.Audience, audienceFilter)).ToList();
             if (!allowIsbat)
                 pool = pool.Where(q => !IsIsbat(q)).ToList();
             if (!allowSituation)
@@ -162,13 +171,13 @@ namespace Exam.Infrastructure.Services
                 [BankSlot.Situation] = 0
             };
 
+            var pending = new List<(Question Question, QuestionBank Bank)>();
             foreach (var bank in selected)
             {
-                var slot = Classify(bank);
                 var question = new Question
                 {
                     ExamId = examId,
-                    Text = bank.Text,
+                    Text = ExamQuestionText(bank),
                     Type = bank.Type,
                     InputKind = string.IsNullOrWhiteSpace(bank.InputKind)
                         ? (bank.Type == QuestionType.OpenEnded ? "Text" : "Choice")
@@ -179,8 +188,14 @@ namespace Exam.Infrastructure.Services
                     SourceQnum = bank.Qnum
                 };
                 _context.Questions.Add(question);
-                await _context.SaveChangesAsync(cancellationToken);
+                pending.Add((question, bank));
+            }
 
+            await _context.SaveChangesAsync(cancellationToken);
+
+            foreach (var (question, bank) in pending)
+            {
+                var slot = Classify(bank);
                 var opts = bankOptions.Where(o => o.QuestionBankId == bank.Id).ToList();
                 if (opts.Count > 0 && question.Type != QuestionType.OpenEnded)
                 {
@@ -190,7 +205,6 @@ namespace Exam.Infrastructure.Services
                         OptionText = o.OptionText,
                         IsCorrect = o.IsCorrect
                     }));
-                    await _context.SaveChangesAsync(cancellationToken);
                 }
 
                 added++;
@@ -262,22 +276,25 @@ namespace Exam.Infrastructure.Services
                     .Where(q => !string.IsNullOrWhiteSpace(q.SituationId))
                     .GroupBy(q => q.SituationId!, StringComparer.OrdinalIgnoreCase)
                     .Select(g => g.OrderBy(x => x.Qnum).ToList())
-                    .OrderBy(_ => rng.Next())
+                    .Where(g => g.Count > 0 && g.Count <= paper.Situation)
                     .ToList();
 
-                var sitCount = 0;
-                foreach (var group in groups)
+                var remaining = paper.Situation;
+                while (remaining > 0)
                 {
-                    if (sitCount >= paper.Situation) break;
-                    if (sitCount + group.Count > paper.Situation && sitCount > 0) continue;
-                    foreach (var q in group)
+                    var fit = groups.Where(g => g.All(q => !used.Contains(q.Id)) && g.Count <= remaining).ToList();
+                    if (fit.Count == 0) break;
+                    var chosen = fit
+                        .OrderBy(g => g.Count == remaining ? 0 : 1)
+                        .ThenByDescending(g => g.Count)
+                        .ThenBy(_ => rng.Next())
+                        .First();
+                    foreach (var q in chosen)
                     {
                         if (used.Add(q.Id))
-                        {
                             result.Add(q);
-                            sitCount++;
-                        }
                     }
+                    remaining -= chosen.Count;
                 }
             }
 
@@ -327,6 +344,70 @@ namespace Exam.Infrastructure.Services
             if (q.Type == QuestionType.OpenEnded || q.InputKind.Equals("Text", StringComparison.OrdinalIgnoreCase))
                 return BankSlot.Written;
             return BankSlot.Mcq;
+        }
+
+        private async Task ReplaceOrConflictAsync(int examId, CancellationToken cancellationToken)
+        {
+            var existing = await _context.Questions
+                .Where(q => q.ExamId == examId)
+                .ToListAsync(cancellationToken);
+            if (existing.Count == 0) return;
+
+            var bankSourced = existing.Where(q => !string.IsNullOrWhiteSpace(q.SourceQnum)).ToList();
+            if (bankSourced.Count == 0)
+            {
+                throw new FromBankConflictException(
+                    "Bu imtahanda bankdan kopyalanmamış suallar var (SourceQnum yoxdur). Əl ilə əlavə olunanları silməmək üçün from-bank rədd edildi.");
+            }
+
+            var ids = bankSourced.Select(q => q.Id).ToList();
+            var answered = await _context.StudentAnswers
+                .AnyAsync(a => ids.Contains(a.QuestionId), cancellationToken);
+            if (answered)
+            {
+                throw new FromBankConflictException(
+                    "Bank suallarının artıq cavabları var; from-bank əvəzləməsi rədd edildi.");
+            }
+
+            var optionIds = await _context.QuestionOptions
+                .Where(o => ids.Contains(o.QuestionId))
+                .Select(o => o.Id)
+                .ToListAsync(cancellationToken);
+            if (optionIds.Count > 0)
+            {
+                var optionAnswers = await _context.StudentAnswers
+                    .Where(a => a.SelectedOptionId != null && optionIds.Contains(a.SelectedOptionId.Value))
+                    .ToListAsync(cancellationToken);
+                if (optionAnswers.Count > 0)
+                    throw new FromBankConflictException(
+                        "Bank suallarının artıq cavabları var; from-bank əvəzləməsi rədd edildi.");
+            }
+
+            var options = await _context.QuestionOptions
+                .Where(o => ids.Contains(o.QuestionId))
+                .ToListAsync(cancellationToken);
+            _context.QuestionOptions.RemoveRange(options);
+            _context.Questions.RemoveRange(bankSourced);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+
+        internal static string ExamQuestionText(QuestionBank bank)
+        {
+            var text = bank.Text ?? "";
+            var title = bank.SituationTitle?.Trim();
+            if (!string.IsNullOrWhiteSpace(title)
+                && !text.Contains(title, StringComparison.OrdinalIgnoreCase))
+            {
+                text = title + "\n\n" + text;
+            }
+
+            var figure = bank.FigureUrl?.Trim();
+            if (!string.IsNullOrWhiteSpace(figure) && !text.Contains(figure, StringComparison.OrdinalIgnoreCase))
+            {
+                text = text + "\n\n<img src=\"" + figure + "\" alt=\"figure\" />\n\n![figure](" + figure + ")";
+            }
+
+            return text;
         }
 
         internal static bool IsIsbat(QuestionBank q)
