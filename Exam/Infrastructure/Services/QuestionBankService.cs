@@ -148,7 +148,7 @@ namespace Exam.Infrastructure.Services
                     || q.Grade.EndsWith("," + grade)
                     || q.Grade.Contains("," + grade + ","));
             }
-            if (!ignoreExamDifficulty && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
+            if (!ignoreExamDifficulty && quota.DifficultyStrict == true && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
             {
                 var levels = quota.DifficultyLevel
                     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -182,7 +182,14 @@ namespace Exam.Infrastructure.Services
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
             var copyCounts = await LoadCopyCountsAsync(cancellationToken);
-            var selected = SelectPool(pool, paper, allowSituation, copyCounts, mixDifficulties: ignoreExamDifficulty);
+            var selected = SelectPool(
+                pool,
+                paper,
+                allowSituation,
+                copyCounts,
+                mixDifficulties: ignoreExamDifficulty,
+                quota,
+                out var usedDifficultyFallback);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
                 ? new List<QuestionBankOption>()
@@ -249,6 +256,8 @@ namespace Exam.Infrastructure.Services
             var warnings = new List<string>();
             if (ignoreExamDifficulty && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
                 warnings.Add("Həftəlik sınaqda imtahan çətinliyi yoxdur; DifficultyLevel nəzərə alınmadı (sual çətinlikləri qarışıq).");
+            if (usedDifficultyFallback)
+                warnings.Add("Mövzu kvotasında çətin/orta tapılmadı; boş zolaq asan tərəfə endirildi (çətin→orta→asan).");
             if (!paper.FillAny)
             {
                 WarnIfShort(warnings, "MCQ", paper.Mcq, counts[BankSlot.Mcq]);
@@ -302,11 +311,14 @@ namespace Exam.Infrastructure.Services
             PaperQuota paper,
             bool allowSituation,
             IReadOnlyDictionary<string, int> copies,
-            bool mixDifficulties = false)
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            out bool usedDifficultyFallback)
         {
             var rng = Random.Shared;
             var used = new HashSet<int>();
             var result = new List<QuestionBank>();
+            usedDifficultyFallback = false;
 
             if (allowSituation && paper.Situation > 0)
             {
@@ -343,20 +355,13 @@ namespace Exam.Infrastructure.Services
             {
                 var need = Math.Max(0, paper.Mcq - result.Count);
                 var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation);
-                var taken = mixDifficulties
-                    ? InterleaveDifficulties(candidates, need, result, copies, rng)
-                    : BankUsage.TakePreferred(candidates, need, result, copies, rng);
-                foreach (var q in taken)
-                {
-                    used.Add(q.Id);
-                    result.Add(q);
-                }
+                TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
                 return result;
             }
 
-            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties);
-            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties);
-            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
             return result;
         }
 
@@ -368,13 +373,45 @@ namespace Exam.Infrastructure.Services
             int need,
             IReadOnlyDictionary<string, int> copies,
             Random rng,
-            bool mixDifficulties)
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            ref bool usedDifficultyFallback)
         {
             if (need <= 0) return;
             var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) == slot);
-            var taken = mixDifficulties
-                ? InterleaveDifficulties(candidates, need, result, copies, rng)
-                : BankUsage.TakePreferred(candidates, need, result, copies, rng);
+            TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+        }
+
+        private static void TakeWithBands(
+            List<QuestionBank> result,
+            HashSet<int> used,
+            IEnumerable<QuestionBank> candidates,
+            int need,
+            IReadOnlyDictionary<string, int> copies,
+            Random rng,
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            ref bool usedDifficultyFallback)
+        {
+            var bands = BankDifficulty.Plan(
+                need,
+                mixDifficulties,
+                quota.AsanCount,
+                quota.OrtaCount,
+                quota.CetinCount,
+                quota.DifficultyLevel);
+            List<QuestionBank> taken;
+            if (bands == null)
+            {
+                taken = BankUsage.TakePreferred(candidates, need, result, copies, rng);
+            }
+            else
+            {
+                taken = BankDifficulty.Fill(
+                    candidates, need, result, copies, rng, bands, out var fell,
+                    strict: quota.DifficultyStrict == true);
+                if (fell) usedDifficultyFallback = true;
+            }
             foreach (var q in taken)
             {
                 used.Add(q.Id);
@@ -382,46 +419,7 @@ namespace Exam.Infrastructure.Services
             }
         }
 
-        internal static List<QuestionBank> InterleaveDifficulties(
-            IEnumerable<QuestionBank> candidates,
-            int need,
-            IReadOnlyList<QuestionBank> already,
-            IReadOnlyDictionary<string, int> copies,
-            Random rng)
-        {
-            if (need <= 0) return new List<QuestionBank>();
-            var buckets = candidates
-                .GroupBy(DifficultyBand)
-                .Select(g => BankUsage.OrderByPreference(g, copies, rng))
-                .Where(b => b.Count > 0)
-                .OrderBy(_ => rng.Next())
-                .ToList();
-            var result = new List<QuestionBank>();
-            var chosen = already.ToList();
-            var i = 0;
-            while (result.Count < need && buckets.Exists(b => b.Count > 0))
-            {
-                var bucket = buckets[i % buckets.Count];
-                i++;
-                if (bucket.Count == 0) continue;
-                var q = bucket[0];
-                bucket.RemoveAt(0);
-                if (BankSimilarity.TooClose(q, chosen)) continue;
-                result.Add(q);
-                chosen.Add(q);
-            }
-            return result;
-        }
-
-        internal static string DifficultyBand(QuestionBank q)
-        {
-            var d = (q.DifficultyLevel ?? "").Trim().ToLowerInvariant()
-                .Replace("ə", "e").Replace("ı", "i").Replace("ç", "c");
-            if (d is "sade" or "easy" or "asan" or "simple") return "asan";
-            if (d is "orta" or "medium" or "middle") return "orta";
-            if (d is "cetin" or "hard" or "cetinlik") return "cetin";
-            return d.Length == 0 ? "unknown" : d;
-        }
+        internal static string DifficultyBand(QuestionBank q) => BankDifficulty.Band(q);
 
         internal static BankSlot Classify(QuestionBank q)
         {
