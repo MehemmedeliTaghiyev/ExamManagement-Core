@@ -16,12 +16,15 @@ Both of these are required (neither alone is enough):
 2. Publish / redeploy this API so `POST /api/question-bank/import` and `POST /api/exams/{id}/from-bank` exist.
 3. Grade 10 overlap (after AddQuestionBank): run `migrations/QuestionBankMultiGrade.sql` in the same SQL Manager. It widens `QuestionBank.Grade` for multi-grade tags (`9,10` / `10,11`) and tags matching grade 9/11 rows as **also** grade 10. It never touches exam `Questions` (including copied exams 94/96/97/98).
 4. Figured items: run `migrations/QuestionBankFigures.sql`. It widens `QuestionBank.FigureUrl` (multiple URLs) and deletes text-only duplicate bank rows of a figured stem. uniqueness_text stays in local SQLite for cosine — not a second student-facing row. Exam `Questions` are not altered.
+5. Unused priority: run `migrations/QuestionBankUseCount.sql`. Adds `QuestionBank.UseCount` / `LastUsedAt` and backfills from `Questions.SourceQnum`. From-bank prefers never-copied Qnums, then lowest use / oldest last use; cosine ≥ 0.88 clones are skipped inside the quiz (C#, not Python). Exam `Questions` schema is not altered.
 
 Empty `Audience` on a bank row is never selected for weekly or teacher papers. Empty `Audience` may be used only when the request is specialty/blok.
 
 `POST /api/exams/{id}/from-bank` replaces previous copies that have `SourceQnum`. Manual questions (no `SourceQnum`) are kept. If the exam already has questions and none of them have `SourceQnum`, the API returns **409** instead of appending duplicates.
 
 Weekly from-bank ignores exam `DifficultyLevel` (asan/orta). Quizzes have no paper difficulty; question difficulties mix inside **one** weekly paper per window. Teacher quizzes may still send `DifficultyLevel` to filter questions.
+
+Teacher and weekly from-bank do not treat matching rows equally: unused `SourceQnum` first, then lowest `UseCount` / oldest `LastUsedAt`. If the unused pool cannot fill the quota, least-used rows are reused. A successful copy sets `UseCount` to the distinct-exam count for that Qnum.
 
 Situation/isbat items are copied only when audience is specialty (Blok). Grade-9 buraxılış situation is not injected here.
 

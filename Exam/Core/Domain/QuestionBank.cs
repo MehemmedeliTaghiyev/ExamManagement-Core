@@ -23,5 +23,8 @@ namespace Exam.Core.Domain
         public string? SituationTitle { get; set; }
         /// <summary>One or more figure URLs, semicolon-separated. Selection metadata is topic + difficulty + grade.</summary>
         public string? FigureUrl { get; set; }
+        /// <summary>Distinct exams that copied this Qnum (SourceQnum). Unused rows are preferred.</summary>
+        public int UseCount { get; set; }
+        public DateTime? LastUsedAt { get; set; }
     }
 }

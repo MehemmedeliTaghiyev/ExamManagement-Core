@@ -66,6 +66,10 @@ namespace Exam.Infrastructure.Banking
             var type = ParseType(typeRaw, inputKind, map);
             inputKind = NormalizeInputKind(inputKind, type);
             var points = ParsePoints(pointsRaw, difficulty);
+            var useRaw = First(map, "usecount", "use_count");
+            var useCount = 0;
+            if (int.TryParse(useRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedUse) && parsedUse > 0)
+                useCount = parsedUse;
 
             var options = ParseOptions(map, correct);
 
@@ -88,7 +92,8 @@ namespace Exam.Infrastructure.Banking
                     Language = Trunc(NormalizeLanguage(language), 8),
                     SituationId = Trunc(situationId, 64),
                     SituationTitle = Trunc(situationTitle, 300),
-                    FigureUrl = figure
+                    FigureUrl = figure,
+                    UseCount = useCount
                 },
                 Options = options
             };

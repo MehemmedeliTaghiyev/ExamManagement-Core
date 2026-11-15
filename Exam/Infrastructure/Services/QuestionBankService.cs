@@ -181,7 +181,8 @@ namespace Exam.Infrastructure.Services
             if (!allowSituation)
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
-            var selected = SelectPool(pool, paper, allowSituation, mixDifficulties: ignoreExamDifficulty);
+            var copyCounts = await LoadCopyCountsAsync(cancellationToken);
+            var selected = SelectPool(pool, paper, allowSituation, copyCounts, mixDifficulties: ignoreExamDifficulty);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
                 ? new List<QuestionBankOption>()
@@ -242,6 +243,7 @@ namespace Exam.Infrastructure.Services
             }
 
             exam.TotalQuestions = await _context.Questions.CountAsync(q => q.ExamId == examId, cancellationToken);
+            await TouchUsageAsync(selected.Select(s => s.Id).ToList(), cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
 
             var warnings = new List<string>();
@@ -295,7 +297,12 @@ namespace Exam.Infrastructure.Services
             };
         }
 
-        private static List<QuestionBank> SelectPool(List<QuestionBank> pool, PaperQuota paper, bool allowSituation, bool mixDifficulties = false)
+        private static List<QuestionBank> SelectPool(
+            List<QuestionBank> pool,
+            PaperQuota paper,
+            bool allowSituation,
+            IReadOnlyDictionary<string, int> copies,
+            bool mixDifficulties = false)
         {
             var rng = Random.Shared;
             var used = new HashSet<int>();
@@ -316,7 +323,10 @@ namespace Exam.Infrastructure.Services
                     var fit = groups.Where(g => g.All(q => !used.Contains(q.Id)) && g.Count <= remaining).ToList();
                     if (fit.Count == 0) break;
                     var chosen = fit
-                        .OrderBy(g => g.Count == remaining ? 0 : 1)
+                        .OrderBy(g => g.All(q => BankUsage.Unused(q, copies)) ? 0 : 1)
+                        .ThenBy(g => g.Min(q => BankUsage.EffectiveUse(q, copies)))
+                        .ThenBy(g => g.Min(q => q.LastUsedAt ?? DateTime.MinValue))
+                        .ThenBy(g => g.Count == remaining ? 0 : 1)
                         .ThenByDescending(g => g.Count)
                         .ThenBy(_ => rng.Next())
                         .First();
@@ -334,8 +344,8 @@ namespace Exam.Infrastructure.Services
                 var need = Math.Max(0, paper.Mcq - result.Count);
                 var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation);
                 var taken = mixDifficulties
-                    ? InterleaveDifficulties(candidates, need, rng)
-                    : candidates.OrderBy(_ => rng.Next()).Take(need).ToList();
+                    ? InterleaveDifficulties(candidates, need, result, copies, rng)
+                    : BankUsage.TakePreferred(candidates, need, result, copies, rng);
                 foreach (var q in taken)
                 {
                     used.Add(q.Id);
@@ -344,19 +354,27 @@ namespace Exam.Infrastructure.Services
                 return result;
             }
 
-            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, rng, mixDifficulties);
-            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, rng, mixDifficulties);
-            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties);
             return result;
         }
 
-        private static void TakeSlot(List<QuestionBank> result, HashSet<int> used, List<QuestionBank> pool, BankSlot slot, int need, Random rng, bool mixDifficulties)
+        private static void TakeSlot(
+            List<QuestionBank> result,
+            HashSet<int> used,
+            List<QuestionBank> pool,
+            BankSlot slot,
+            int need,
+            IReadOnlyDictionary<string, int> copies,
+            Random rng,
+            bool mixDifficulties)
         {
             if (need <= 0) return;
             var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) == slot);
             var taken = mixDifficulties
-                ? InterleaveDifficulties(candidates, need, rng)
-                : candidates.OrderBy(_ => rng.Next()).Take(need).ToList();
+                ? InterleaveDifficulties(candidates, need, result, copies, rng)
+                : BankUsage.TakePreferred(candidates, need, result, copies, rng);
             foreach (var q in taken)
             {
                 used.Add(q.Id);
@@ -364,24 +382,33 @@ namespace Exam.Infrastructure.Services
             }
         }
 
-        internal static List<QuestionBank> InterleaveDifficulties(IEnumerable<QuestionBank> candidates, int need, Random rng)
+        internal static List<QuestionBank> InterleaveDifficulties(
+            IEnumerable<QuestionBank> candidates,
+            int need,
+            IReadOnlyList<QuestionBank> already,
+            IReadOnlyDictionary<string, int> copies,
+            Random rng)
         {
             if (need <= 0) return new List<QuestionBank>();
             var buckets = candidates
                 .GroupBy(DifficultyBand)
-                .Select(g => g.OrderBy(_ => rng.Next()).ToList())
+                .Select(g => BankUsage.OrderByPreference(g, copies, rng))
                 .Where(b => b.Count > 0)
                 .OrderBy(_ => rng.Next())
                 .ToList();
             var result = new List<QuestionBank>();
+            var chosen = already.ToList();
             var i = 0;
             while (result.Count < need && buckets.Exists(b => b.Count > 0))
             {
                 var bucket = buckets[i % buckets.Count];
                 i++;
                 if (bucket.Count == 0) continue;
-                result.Add(bucket[0]);
+                var q = bucket[0];
                 bucket.RemoveAt(0);
+                if (BankSimilarity.TooClose(q, chosen)) continue;
+                result.Add(q);
+                chosen.Add(q);
             }
             return result;
         }
@@ -501,6 +528,42 @@ namespace Exam.Infrastructure.Services
 
             dest.Text = src.Text;
             dest.FigureUrl = BankFigures.Join(BankFigures.Parse(dest.FigureUrl).Concat(BankFigures.Parse(src.FigureUrl)));
+        }
+
+        private async Task<Dictionary<string, int>> LoadCopyCountsAsync(CancellationToken cancellationToken)
+        {
+            var rows = await _context.Questions
+                .AsNoTracking()
+                .Where(q => q.SourceQnum != null && q.SourceQnum != "")
+                .Select(q => new { q.SourceQnum, q.ExamId })
+                .ToListAsync(cancellationToken);
+            return rows
+                .GroupBy(r => r.SourceQnum!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.ExamId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        private async Task TouchUsageAsync(List<int> bankIds, CancellationToken cancellationToken)
+        {
+            if (bankIds.Count == 0) return;
+            var rows = await _context.QuestionBank
+                .Where(q => bankIds.Contains(q.Id))
+                .ToListAsync(cancellationToken);
+            var qnums = rows.Select(r => r.Qnum).Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+            var fresh = await _context.Questions
+                .AsNoTracking()
+                .Where(q => q.SourceQnum != null && qnums.Contains(q.SourceQnum))
+                .Select(q => new { q.SourceQnum, q.ExamId })
+                .ToListAsync(cancellationToken);
+            var counts = fresh
+                .GroupBy(r => r.SourceQnum!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.ExamId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+            var now = DateTime.UtcNow;
+            foreach (var row in rows)
+            {
+                counts.TryGetValue(row.Qnum, out var n);
+                row.UseCount = n;
+                row.LastUsedAt = now;
+            }
         }
 
         private static void WarnIfShort(List<string> warnings, string label, int need, int got)
