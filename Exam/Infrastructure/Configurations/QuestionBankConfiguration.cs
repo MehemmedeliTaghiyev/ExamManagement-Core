@@ -39,7 +39,7 @@ namespace Exam.Infrastructure.Configurations
                 .HasMaxLength(20);
 
             builder.Property(q => q.Grade)
-                .HasMaxLength(8);
+                .HasMaxLength(32);
 
             builder.Property(q => q.Subject)
                 .HasMaxLength(32);

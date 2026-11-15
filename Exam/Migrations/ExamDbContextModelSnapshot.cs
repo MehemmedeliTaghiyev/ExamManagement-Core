@@ -152,8 +152,8 @@ namespace Exam.Migrations
                         .HasColumnType("nvarchar(1000)");
 
                     b.Property<string>("Grade")
-                        .HasMaxLength(8)
-                        .HasColumnType("nvarchar(8)");
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
 
                     b.Property<string>("InputKind")
                         .IsRequired()

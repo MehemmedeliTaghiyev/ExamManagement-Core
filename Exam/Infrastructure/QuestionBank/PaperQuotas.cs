@@ -52,9 +52,17 @@ namespace Exam.Infrastructure.Banking
 
         public static string NormalizeGrade(string? grade)
         {
-            if (string.IsNullOrWhiteSpace(grade)) return "";
-            var digits = new string(grade.Where(char.IsDigit).ToArray());
-            return digits;
+            var parsed = BankGrades.Parse(grade);
+            return parsed.Count == 0 ? "" : parsed[0];
+        }
+
+        /// <summary>Weekly papers have no exam difficulty (asan/orta). Teacher may still filter questions.</summary>
+        public static bool IgnoreExamDifficulty(PaperKind kind, string? audience)
+        {
+            var a = NormalizeAudience(audience);
+            if (a == "teacher") return false;
+            if (a == "weekly") return true;
+            return kind == PaperKind.Weekly;
         }
 
         public static PaperKind ParseKind(string? kind, string? audience)

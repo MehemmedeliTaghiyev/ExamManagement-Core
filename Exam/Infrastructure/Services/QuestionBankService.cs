@@ -103,6 +103,7 @@ namespace Exam.Infrastructure.Services
             var allowIsbat = PaperQuotas.AllowIsbat(kind, quota.Audience);
             var audienceFilter = PaperQuotas.NormalizeAudience(quota.Audience)
                 ?? PaperQuotas.AudienceFromKind(kind);
+            var ignoreExamDifficulty = PaperQuotas.IgnoreExamDifficulty(kind, quota.Audience);
 
             await ReplaceOrConflictAsync(examId, cancellationToken);
 
@@ -116,12 +117,18 @@ namespace Exam.Infrastructure.Services
             {
                 query = query.Where(q => q.Audience != null && q.Audience != "");
             }
-            if (!string.IsNullOrWhiteSpace(quota.Grade))
+            var wantedGrades = BankGrades.Parse(quota.Grade);
+            if (wantedGrades.Count == 1)
             {
-                var grade = PaperQuotas.NormalizeGrade(quota.Grade);
-                query = query.Where(q => q.Grade == null || q.Grade == "" || q.Grade.Contains(grade));
+                var grade = wantedGrades[0];
+                query = query.Where(q =>
+                    q.Grade == null || q.Grade == ""
+                    || q.Grade == grade
+                    || q.Grade.StartsWith(grade + ",")
+                    || q.Grade.EndsWith("," + grade)
+                    || q.Grade.Contains("," + grade + ","));
             }
-            if (!string.IsNullOrWhiteSpace(quota.DifficultyLevel))
+            if (!ignoreExamDifficulty && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
             {
                 var levels = quota.DifficultyLevel
                     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -145,6 +152,8 @@ namespace Exam.Infrastructure.Services
             }
 
             var pool = await query.ToListAsync(cancellationToken);
+            if (wantedGrades.Count > 0)
+                pool = pool.Where(q => BankGrades.IsBlank(q.Grade) || BankGrades.Overlaps(q.Grade, wantedGrades)).ToList();
             if (!string.IsNullOrWhiteSpace(audienceFilter))
                 pool = pool.Where(q => PaperQuotas.BankAudienceFits(q.Audience, audienceFilter)).ToList();
             if (!allowIsbat)
@@ -152,7 +161,7 @@ namespace Exam.Infrastructure.Services
             if (!allowSituation)
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
-            var selected = SelectPool(pool, paper, allowSituation);
+            var selected = SelectPool(pool, paper, allowSituation, mixDifficulties: ignoreExamDifficulty);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
                 ? new List<QuestionBankOption>()
@@ -216,6 +225,8 @@ namespace Exam.Infrastructure.Services
             await _context.SaveChangesAsync(cancellationToken);
 
             var warnings = new List<string>();
+            if (ignoreExamDifficulty && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
+                warnings.Add("Həftəlik sınaqda imtahan çətinliyi yoxdur; DifficultyLevel nəzərə alınmadı (sual çətinlikləri qarışıq).");
             if (!paper.FillAny)
             {
                 WarnIfShort(warnings, "MCQ", paper.Mcq, counts[BankSlot.Mcq]);
@@ -264,7 +275,7 @@ namespace Exam.Infrastructure.Services
             };
         }
 
-        private static List<QuestionBank> SelectPool(List<QuestionBank> pool, PaperQuota paper, bool allowSituation)
+        private static List<QuestionBank> SelectPool(List<QuestionBank> pool, PaperQuota paper, bool allowSituation, bool mixDifficulties = false)
         {
             var rng = Random.Shared;
             var used = new HashSet<int>();
@@ -301,12 +312,11 @@ namespace Exam.Infrastructure.Services
             if (paper.FillAny)
             {
                 var need = Math.Max(0, paper.Mcq - result.Count);
-                var candidates = pool
-                    .Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation)
-                    .OrderBy(_ => rng.Next())
-                    .Take(need)
-                    .ToList();
-                foreach (var q in candidates)
+                var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation);
+                var taken = mixDifficulties
+                    ? InterleaveDifficulties(candidates, need, rng)
+                    : candidates.OrderBy(_ => rng.Next()).Take(need).ToList();
+                foreach (var q in taken)
                 {
                     used.Add(q.Id);
                     result.Add(q);
@@ -314,25 +324,56 @@ namespace Exam.Infrastructure.Services
                 return result;
             }
 
-            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, rng);
-            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, rng);
-            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, rng);
+            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, rng, mixDifficulties);
+            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, rng, mixDifficulties);
             return result;
         }
 
-        private static void TakeSlot(List<QuestionBank> result, HashSet<int> used, List<QuestionBank> pool, BankSlot slot, int need, Random rng)
+        private static void TakeSlot(List<QuestionBank> result, HashSet<int> used, List<QuestionBank> pool, BankSlot slot, int need, Random rng, bool mixDifficulties)
         {
             if (need <= 0) return;
-            var candidates = pool
-                .Where(q => !used.Contains(q.Id) && Classify(q) == slot)
-                .OrderBy(_ => rng.Next())
-                .Take(need)
-                .ToList();
-            foreach (var q in candidates)
+            var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) == slot);
+            var taken = mixDifficulties
+                ? InterleaveDifficulties(candidates, need, rng)
+                : candidates.OrderBy(_ => rng.Next()).Take(need).ToList();
+            foreach (var q in taken)
             {
                 used.Add(q.Id);
                 result.Add(q);
             }
+        }
+
+        internal static List<QuestionBank> InterleaveDifficulties(IEnumerable<QuestionBank> candidates, int need, Random rng)
+        {
+            if (need <= 0) return new List<QuestionBank>();
+            var buckets = candidates
+                .GroupBy(DifficultyBand)
+                .Select(g => g.OrderBy(_ => rng.Next()).ToList())
+                .Where(b => b.Count > 0)
+                .OrderBy(_ => rng.Next())
+                .ToList();
+            var result = new List<QuestionBank>();
+            var i = 0;
+            while (result.Count < need && buckets.Exists(b => b.Count > 0))
+            {
+                var bucket = buckets[i % buckets.Count];
+                i++;
+                if (bucket.Count == 0) continue;
+                result.Add(bucket[0]);
+                bucket.RemoveAt(0);
+            }
+            return result;
+        }
+
+        internal static string DifficultyBand(QuestionBank q)
+        {
+            var d = (q.DifficultyLevel ?? "").Trim().ToLowerInvariant()
+                .Replace("ə", "e").Replace("ı", "i").Replace("ç", "c");
+            if (d is "sade" or "easy" or "asan" or "simple") return "asan";
+            if (d is "orta" or "medium" or "middle") return "orta";
+            if (d is "cetin" or "hard" or "cetinlik") return "cetin";
+            return d.Length == 0 ? "unknown" : d;
         }
 
         internal static BankSlot Classify(QuestionBank q)
@@ -426,10 +467,10 @@ namespace Exam.Infrastructure.Services
             dest.CorrectText = src.CorrectText;
             dest.DifficultyLevel = src.DifficultyLevel;
             dest.Points = src.Points;
-            dest.Grade = src.Grade;
+            dest.MainTopic = src.MainTopic;
+            dest.Grade = Grade10Syllabus.Tag(BankGrades.Union(dest.Grade, src.Grade), src.MainTopic);
             dest.Subject = src.Subject;
             dest.Audience = src.Audience;
-            dest.MainTopic = src.MainTopic;
             dest.Language = src.Language;
             dest.SituationId = src.SituationId;
             dest.SituationTitle = src.SituationTitle;

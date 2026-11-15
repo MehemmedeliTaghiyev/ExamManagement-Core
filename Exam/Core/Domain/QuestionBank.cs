@@ -12,6 +12,7 @@ namespace Exam.Core.Domain
         public string? CorrectText { get; set; }
         public string? DifficultyLevel { get; set; }
         public int Points { get; set; } = 1;
+        /// <summary>Comma-separated 9/10/11. A chapter may be tagged for several grades.</summary>
         public string? Grade { get; set; }
         public string? Subject { get; set; }
         public string? Audience { get; set; }

@@ -79,7 +79,7 @@ namespace Exam.Infrastructure.Banking
                     CorrectText = EmptyToNull(correct),
                     DifficultyLevel = EmptyToNull(difficulty),
                     Points = points,
-                    Grade = Trunc(grade, 8),
+                    Grade = Trunc(Grade10Syllabus.Tag(grade, topic), 32),
                     Subject = Trunc(subject, 32),
                     Audience = PaperQuotas.NormalizeAudience(audience),
                     MainTopic = Trunc(topic, 200),
