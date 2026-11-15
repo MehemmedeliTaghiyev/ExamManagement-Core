@@ -42,10 +42,9 @@ namespace Exam.Infrastructure.Banking
         private static QuestionBankImportRow MapRow(IReadOnlyDictionary<string, string> map, int lineNo)
         {
             var qnum = First(map, "qnum", "q_num", "number");
-            var text = First(map, "text", "question", "stemtext");
-            var stem = First(map, "stem");
-            if (!string.IsNullOrWhiteSpace(stem) && !text.Contains(stem, StringComparison.Ordinal))
-                text = string.IsNullOrWhiteSpace(text) ? stem : stem + "\n\n" + text;
+            var stem = First(map, "stem", "stemtext");
+            var text = First(map, "text", "question");
+            _ = First(map, "uniquenesstext", "uniqueness_text", "uniqueness");
 
             var typeRaw = First(map, "type");
             var inputKind = First(map, "inputkind", "input_kind");
@@ -59,7 +58,10 @@ namespace Exam.Infrastructure.Banking
             var language = First(map, "language", "lang");
             var situationId = EmptyToNull(First(map, "situationid", "situation_id"));
             var situationTitle = EmptyToNull(First(map, "situationtitle", "situation_title"));
-            var figure = EmptyToNull(First(map, "figureurl", "figure_url", "figure_path", "figure", "imageurl"));
+            var figure = BankFigures.Join(
+                BankFigures.Parse(First(map, "figureurl", "figure_url", "figure_path", "figure", "imageurl", "figures"))
+                    .Concat(BankFigures.Parse(First(map, "figure2", "figure_2", "figureurl2"))));
+            text = BankFigures.StudentFacingText(stem, text, figure);
 
             var type = ParseType(typeRaw, inputKind, map);
             inputKind = NormalizeInputKind(inputKind, type);
@@ -86,7 +88,7 @@ namespace Exam.Infrastructure.Banking
                     Language = Trunc(NormalizeLanguage(language), 8),
                     SituationId = Trunc(situationId, 64),
                     SituationTitle = Trunc(situationTitle, 300),
-                    FigureUrl = Trunc(figure, 1000)
+                    FigureUrl = figure
                 },
                 Options = options
             };

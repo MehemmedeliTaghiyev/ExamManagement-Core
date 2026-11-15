@@ -148,8 +148,7 @@ namespace Exam.Migrations
                         .HasColumnType("nvarchar(20)");
 
                     b.Property<string>("FigureUrl")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Grade")
                         .HasMaxLength(32)

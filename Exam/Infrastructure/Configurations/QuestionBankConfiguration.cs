@@ -60,7 +60,7 @@ namespace Exam.Infrastructure.Configurations
                 .HasMaxLength(300);
 
             builder.Property(q => q.FigureUrl)
-                .HasMaxLength(1000);
+                .HasColumnType("nvarchar(max)");
         }
     }
 }

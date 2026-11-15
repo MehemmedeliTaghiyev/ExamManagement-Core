@@ -6,6 +6,7 @@ namespace Exam.Core.Domain
     {
         public int Id { get; set; }
         public string Qnum { get; set; } = string.Empty;
+        /// <summary>Student-facing stem (şərt). Figured items do not store uniqueness/OCR dumps here.</summary>
         public string Text { get; set; } = string.Empty;
         public QuestionType Type { get; set; } = QuestionType.SingleChoice;
         public string InputKind { get; set; } = "Choice";
@@ -20,6 +21,7 @@ namespace Exam.Core.Domain
         public string? Language { get; set; }
         public string? SituationId { get; set; }
         public string? SituationTitle { get; set; }
+        /// <summary>One or more figure URLs, semicolon-separated. Selection metadata is topic + difficulty + grade.</summary>
         public string? FigureUrl { get; set; }
     }
 }

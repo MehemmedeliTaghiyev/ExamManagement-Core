@@ -41,6 +41,16 @@ namespace Exam.Infrastructure.Services
                     .Where(o => existingIds.Contains(o.QuestionBankId))
                     .ToListAsync(cancellationToken);
 
+            var figuredPool = await _context.QuestionBank
+                .AsNoTracking()
+                .Where(q => q.FigureUrl != null && q.FigureUrl != "")
+                .Select(q => new { q.Text, q.FigureUrl, q.MainTopic })
+                .ToListAsync(cancellationToken);
+            var figuredIncoming = rows
+                .Where(r => BankFigures.HasFigure(r.Entity.FigureUrl))
+                .Select(r => r.Entity)
+                .ToList();
+
             var insertedRows = new List<QuestionBankImportRow>();
             foreach (var row in rows)
             {
@@ -55,6 +65,16 @@ namespace Exam.Infrastructure.Services
                 {
                     result.Skipped++;
                     result.Errors.Add($"Sətir {row.Line} ({row.Entity.Qnum}): Text boşdur.");
+                    continue;
+                }
+
+                if (!BankFigures.HasFigure(row.Entity.FigureUrl)
+                    && (figuredIncoming.Any(f => f.Qnum != row.Entity.Qnum
+                            && BankFigures.IsTextOnlyDuplicate(row.Entity.Text, row.Entity.FigureUrl, row.Entity.MainTopic, f.Text, f.FigureUrl, f.MainTopic))
+                        || figuredPool.Any(f => BankFigures.IsTextOnlyDuplicate(row.Entity.Text, row.Entity.FigureUrl, row.Entity.MainTopic, f.Text, f.FigureUrl, f.MainTopic))))
+                {
+                    result.Skipped++;
+                    result.Errors.Add($"Sətir {row.Line} ({row.Entity.Qnum}): şəkilli sualın mətn nüsxəsi atıldı.");
                     continue;
                 }
 
@@ -193,7 +213,7 @@ namespace Exam.Infrastructure.Services
                         : bank.InputKind,
                     CorrectText = bank.CorrectText,
                     Points = bank.Points > 0 ? bank.Points : 1,
-                    FigureUrl = bank.FigureUrl,
+                    FigureUrl = BankFigures.First(bank.FigureUrl),
                     SourceQnum = bank.Qnum
                 };
                 _context.Questions.Add(question);
@@ -442,9 +462,9 @@ namespace Exam.Infrastructure.Services
                 text = title + "\n\n" + text;
             }
 
-            var figure = bank.FigureUrl?.Trim();
-            if (!string.IsNullOrWhiteSpace(figure) && !text.Contains(figure, StringComparison.OrdinalIgnoreCase))
+            foreach (var figure in BankFigures.Parse(bank.FigureUrl))
             {
+                if (text.Contains(figure, StringComparison.OrdinalIgnoreCase)) continue;
                 text = text + "\n\n<img src=\"" + figure + "\" alt=\"figure\" />\n\n![figure](" + figure + ")";
             }
 
@@ -461,7 +481,6 @@ namespace Exam.Infrastructure.Services
 
         private static void CopyBankFields(QuestionBank src, QuestionBank dest)
         {
-            dest.Text = src.Text;
             dest.Type = src.Type;
             dest.InputKind = src.InputKind;
             dest.CorrectText = src.CorrectText;
@@ -474,7 +493,14 @@ namespace Exam.Infrastructure.Services
             dest.Language = src.Language;
             dest.SituationId = src.SituationId;
             dest.SituationTitle = src.SituationTitle;
-            dest.FigureUrl = src.FigureUrl;
+            if (BankFigures.HasFigure(dest.FigureUrl) && !BankFigures.HasFigure(src.FigureUrl))
+            {
+                dest.Text = BankFigures.StudentFacingText(dest.Text, src.Text, dest.FigureUrl);
+                return;
+            }
+
+            dest.Text = src.Text;
+            dest.FigureUrl = BankFigures.Join(BankFigures.Parse(dest.FigureUrl).Concat(BankFigures.Parse(src.FigureUrl)));
         }
 
         private static void WarnIfShort(List<string> warnings, string label, int need, int got)
