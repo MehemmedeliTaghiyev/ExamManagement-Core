@@ -39,7 +39,7 @@ namespace Exam.Infrastructure.Configurations
                 .HasMaxLength(20);
 
             builder.Property(q => q.Grade)
-                .HasMaxLength(8);
+                .HasMaxLength(32);
 
             builder.Property(q => q.Subject)
                 .HasMaxLength(32);
@@ -60,7 +60,12 @@ namespace Exam.Infrastructure.Configurations
                 .HasMaxLength(300);
 
             builder.Property(q => q.FigureUrl)
-                .HasMaxLength(1000);
+                .HasColumnType("nvarchar(max)");
+
+            builder.Property(q => q.UseCount)
+                .HasDefaultValue(0);
+
+            builder.Property(q => q.LastUsedAt);
         }
     }
 }

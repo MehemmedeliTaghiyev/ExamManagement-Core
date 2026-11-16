@@ -148,12 +148,11 @@ namespace Exam.Migrations
                         .HasColumnType("nvarchar(20)");
 
                     b.Property<string>("FigureUrl")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Grade")
-                        .HasMaxLength(8)
-                        .HasColumnType("nvarchar(8)");
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
 
                     b.Property<string>("InputKind")
                         .IsRequired()
@@ -163,6 +162,9 @@ namespace Exam.Migrations
                     b.Property<string>("Language")
                         .HasMaxLength(8)
                         .HasColumnType("nvarchar(8)");
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("MainTopic")
                         .HasMaxLength(200)
@@ -196,6 +198,11 @@ namespace Exam.Migrations
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("UseCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
 
                     b.HasKey("Id");
 

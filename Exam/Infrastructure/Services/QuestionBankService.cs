@@ -41,6 +41,16 @@ namespace Exam.Infrastructure.Services
                     .Where(o => existingIds.Contains(o.QuestionBankId))
                     .ToListAsync(cancellationToken);
 
+            var figuredPool = await _context.QuestionBank
+                .AsNoTracking()
+                .Where(q => q.FigureUrl != null && q.FigureUrl != "")
+                .Select(q => new { q.Text, q.FigureUrl, q.MainTopic })
+                .ToListAsync(cancellationToken);
+            var figuredIncoming = rows
+                .Where(r => BankFigures.HasFigure(r.Entity.FigureUrl))
+                .Select(r => r.Entity)
+                .ToList();
+
             var insertedRows = new List<QuestionBankImportRow>();
             foreach (var row in rows)
             {
@@ -55,6 +65,16 @@ namespace Exam.Infrastructure.Services
                 {
                     result.Skipped++;
                     result.Errors.Add($"Sətir {row.Line} ({row.Entity.Qnum}): Text boşdur.");
+                    continue;
+                }
+
+                if (!BankFigures.HasFigure(row.Entity.FigureUrl)
+                    && (figuredIncoming.Any(f => f.Qnum != row.Entity.Qnum
+                            && BankFigures.IsTextOnlyDuplicate(row.Entity.Text, row.Entity.FigureUrl, row.Entity.MainTopic, f.Text, f.FigureUrl, f.MainTopic))
+                        || figuredPool.Any(f => BankFigures.IsTextOnlyDuplicate(row.Entity.Text, row.Entity.FigureUrl, row.Entity.MainTopic, f.Text, f.FigureUrl, f.MainTopic))))
+                {
+                    result.Skipped++;
+                    result.Errors.Add($"Sətir {row.Line} ({row.Entity.Qnum}): şəkilli sualın mətn nüsxəsi atıldı.");
                     continue;
                 }
 
@@ -99,10 +119,13 @@ namespace Exam.Infrastructure.Services
 
             quota ??= new FromBankRequestDto();
             var kind = PaperQuotas.ParseKind(quota.Kind, quota.Audience);
+            var studentWeekly = kind == PaperKind.Weekly
+                || PaperQuotas.IsStudentWeeklyExam(exam.Id, exam.Title);
             var allowSituation = PaperQuotas.AllowSituation(kind, quota.Audience);
             var allowIsbat = PaperQuotas.AllowIsbat(kind, quota.Audience);
             var audienceFilter = PaperQuotas.NormalizeAudience(quota.Audience)
                 ?? PaperQuotas.AudienceFromKind(kind);
+            var ignoreExamDifficulty = PaperQuotas.IgnoreExamDifficulty(kind, quota.Audience, studentWeekly);
 
             await ReplaceOrConflictAsync(examId, cancellationToken);
 
@@ -116,12 +139,18 @@ namespace Exam.Infrastructure.Services
             {
                 query = query.Where(q => q.Audience != null && q.Audience != "");
             }
-            if (!string.IsNullOrWhiteSpace(quota.Grade))
+            var wantedGrades = BankGrades.Parse(quota.Grade);
+            if (wantedGrades.Count == 1)
             {
-                var grade = PaperQuotas.NormalizeGrade(quota.Grade);
-                query = query.Where(q => q.Grade == null || q.Grade == "" || q.Grade.Contains(grade));
+                var grade = wantedGrades[0];
+                query = query.Where(q =>
+                    q.Grade == null || q.Grade == ""
+                    || q.Grade == grade
+                    || q.Grade.StartsWith(grade + ",")
+                    || q.Grade.EndsWith("," + grade)
+                    || q.Grade.Contains("," + grade + ","));
             }
-            if (!string.IsNullOrWhiteSpace(quota.DifficultyLevel))
+            if (!ignoreExamDifficulty && quota.DifficultyStrict == true && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
             {
                 var levels = quota.DifficultyLevel
                     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -145,6 +174,8 @@ namespace Exam.Infrastructure.Services
             }
 
             var pool = await query.ToListAsync(cancellationToken);
+            if (wantedGrades.Count > 0)
+                pool = pool.Where(q => BankGrades.IsBlank(q.Grade) || BankGrades.Overlaps(q.Grade, wantedGrades)).ToList();
             if (!string.IsNullOrWhiteSpace(audienceFilter))
                 pool = pool.Where(q => PaperQuotas.BankAudienceFits(q.Audience, audienceFilter)).ToList();
             if (!allowIsbat)
@@ -152,7 +183,19 @@ namespace Exam.Infrastructure.Services
             if (!allowSituation)
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
-            var selected = SelectPool(pool, paper, allowSituation);
+            var copyCounts = await LoadCopyCountsAsync(cancellationToken);
+            var usedQnums = studentWeekly
+                ? await LoadWeeklyUsedQnumsAsync(exam.Id, quota.ExcludeQnums, cancellationToken)
+                : MergeUsed(copyCounts, quota.ExcludeQnums);
+            var selected = SelectPool(
+                pool,
+                paper,
+                allowSituation,
+                copyCounts,
+                mixDifficulties: ignoreExamDifficulty,
+                quota,
+                usedQnums,
+                out var usedDifficultyFallback);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
                 ? new List<QuestionBankOption>()
@@ -184,7 +227,7 @@ namespace Exam.Infrastructure.Services
                         : bank.InputKind,
                     CorrectText = bank.CorrectText,
                     Points = bank.Points > 0 ? bank.Points : 1,
-                    FigureUrl = bank.FigureUrl,
+                    FigureUrl = BankFigures.First(bank.FigureUrl),
                     SourceQnum = bank.Qnum
                 };
                 _context.Questions.Add(question);
@@ -213,9 +256,16 @@ namespace Exam.Infrastructure.Services
             }
 
             exam.TotalQuestions = await _context.Questions.CountAsync(q => q.ExamId == examId, cancellationToken);
+            await TouchUsageAsync(selected.Select(s => s.Id).ToList(), cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
 
             var warnings = new List<string>();
+            if (ignoreExamDifficulty && !string.IsNullOrWhiteSpace(quota.DifficultyLevel))
+                warnings.Add("Həftəlik sınaqda imtahan çətinliyi yoxdur; DifficultyLevel nəzərə alınmadı (sual çətinlikləri qarışıq).");
+            if (usedDifficultyFallback)
+                warnings.Add("Mövzu kvotasında çətin/orta tapılmadı; boş zolaq asan tərəfə endirildi (çətin→orta→asan).");
+            if (studentWeekly && usedQnums is { Count: > 0 })
+                warnings.Add($"Həftəlik kağız əvvəlki həftəlik/daily SourceQnum-ları keçdi ({usedQnums.Count} qnum).");
             if (!paper.FillAny)
             {
                 WarnIfShort(warnings, "MCQ", paper.Mcq, counts[BankSlot.Mcq]);
@@ -264,11 +314,20 @@ namespace Exam.Infrastructure.Services
             };
         }
 
-        private static List<QuestionBank> SelectPool(List<QuestionBank> pool, PaperQuota paper, bool allowSituation)
+        private static List<QuestionBank> SelectPool(
+            List<QuestionBank> pool,
+            PaperQuota paper,
+            bool allowSituation,
+            IReadOnlyDictionary<string, int> copies,
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
+            out bool usedDifficultyFallback)
         {
             var rng = Random.Shared;
             var used = new HashSet<int>();
             var result = new List<QuestionBank>();
+            usedDifficultyFallback = false;
 
             if (allowSituation && paper.Situation > 0)
             {
@@ -285,7 +344,10 @@ namespace Exam.Infrastructure.Services
                     var fit = groups.Where(g => g.All(q => !used.Contains(q.Id)) && g.Count <= remaining).ToList();
                     if (fit.Count == 0) break;
                     var chosen = fit
-                        .OrderBy(g => g.Count == remaining ? 0 : 1)
+                        .OrderBy(g => g.All(q => BankUsage.Unused(q, copies, usedQnums)) ? 0 : 1)
+                        .ThenBy(g => g.Min(q => BankUsage.EffectiveUse(q, copies)))
+                        .ThenBy(g => g.Min(q => q.LastUsedAt ?? DateTime.MinValue))
+                        .ThenBy(g => g.Count == remaining ? 0 : 1)
                         .ThenByDescending(g => g.Count)
                         .ThenBy(_ => rng.Next())
                         .First();
@@ -301,39 +363,75 @@ namespace Exam.Infrastructure.Services
             if (paper.FillAny)
             {
                 var need = Math.Max(0, paper.Mcq - result.Count);
-                var candidates = pool
-                    .Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation)
-                    .OrderBy(_ => rng.Next())
-                    .Take(need)
-                    .ToList();
-                foreach (var q in candidates)
-                {
-                    used.Add(q.Id);
-                    result.Add(q);
-                }
+                var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation);
+                TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
                 return result;
             }
 
-            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, rng);
-            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, rng);
-            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, rng);
+            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
             return result;
         }
 
-        private static void TakeSlot(List<QuestionBank> result, HashSet<int> used, List<QuestionBank> pool, BankSlot slot, int need, Random rng)
+        private static void TakeSlot(
+            List<QuestionBank> result,
+            HashSet<int> used,
+            List<QuestionBank> pool,
+            BankSlot slot,
+            int need,
+            IReadOnlyDictionary<string, int> copies,
+            Random rng,
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
+            ref bool usedDifficultyFallback)
         {
             if (need <= 0) return;
-            var candidates = pool
-                .Where(q => !used.Contains(q.Id) && Classify(q) == slot)
-                .OrderBy(_ => rng.Next())
-                .Take(need)
-                .ToList();
-            foreach (var q in candidates)
+            var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) == slot);
+            TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
+        }
+
+        private static void TakeWithBands(
+            List<QuestionBank> result,
+            HashSet<int> used,
+            IEnumerable<QuestionBank> candidates,
+            int need,
+            IReadOnlyDictionary<string, int> copies,
+            Random rng,
+            bool mixDifficulties,
+            FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
+            ref bool usedDifficultyFallback)
+        {
+            var bands = BankDifficulty.Plan(
+                need,
+                mixDifficulties,
+                quota.AsanCount,
+                quota.OrtaCount,
+                quota.CetinCount,
+                quota.DifficultyLevel);
+            List<QuestionBank> taken;
+            if (bands == null)
+            {
+                taken = BankUsage.TakePreferred(candidates, need, result, copies, rng, usedQnums);
+            }
+            else
+            {
+                taken = BankDifficulty.Fill(
+                    candidates, need, result, copies, rng, bands, out var fell,
+                    strict: quota.DifficultyStrict == true,
+                    usedQnums: usedQnums);
+                if (fell) usedDifficultyFallback = true;
+            }
+            foreach (var q in taken)
             {
                 used.Add(q.Id);
                 result.Add(q);
             }
         }
+
+        internal static string DifficultyBand(QuestionBank q) => BankDifficulty.Band(q);
 
         internal static BankSlot Classify(QuestionBank q)
         {
@@ -401,9 +499,9 @@ namespace Exam.Infrastructure.Services
                 text = title + "\n\n" + text;
             }
 
-            var figure = bank.FigureUrl?.Trim();
-            if (!string.IsNullOrWhiteSpace(figure) && !text.Contains(figure, StringComparison.OrdinalIgnoreCase))
+            foreach (var figure in BankFigures.Parse(bank.FigureUrl))
             {
+                if (text.Contains(figure, StringComparison.OrdinalIgnoreCase)) continue;
                 text = text + "\n\n<img src=\"" + figure + "\" alt=\"figure\" />\n\n![figure](" + figure + ")";
             }
 
@@ -420,20 +518,108 @@ namespace Exam.Infrastructure.Services
 
         private static void CopyBankFields(QuestionBank src, QuestionBank dest)
         {
-            dest.Text = src.Text;
             dest.Type = src.Type;
             dest.InputKind = src.InputKind;
             dest.CorrectText = src.CorrectText;
             dest.DifficultyLevel = src.DifficultyLevel;
             dest.Points = src.Points;
-            dest.Grade = src.Grade;
+            dest.MainTopic = src.MainTopic;
+            dest.Grade = Grade10Syllabus.Tag(BankGrades.Union(dest.Grade, src.Grade), src.MainTopic);
             dest.Subject = src.Subject;
             dest.Audience = src.Audience;
-            dest.MainTopic = src.MainTopic;
             dest.Language = src.Language;
             dest.SituationId = src.SituationId;
             dest.SituationTitle = src.SituationTitle;
-            dest.FigureUrl = src.FigureUrl;
+            if (BankFigures.HasFigure(dest.FigureUrl) && !BankFigures.HasFigure(src.FigureUrl))
+            {
+                dest.Text = BankFigures.StudentFacingText(dest.Text, src.Text, dest.FigureUrl);
+                return;
+            }
+
+            dest.Text = src.Text;
+            dest.FigureUrl = BankFigures.Join(BankFigures.Parse(dest.FigureUrl).Concat(BankFigures.Parse(src.FigureUrl)));
+        }
+
+        private async Task<Dictionary<string, int>> LoadCopyCountsAsync(CancellationToken cancellationToken)
+        {
+            var rows = await _context.Questions
+                .AsNoTracking()
+                .Where(q => q.SourceQnum != null && q.SourceQnum != "")
+                .Select(q => new { q.SourceQnum, q.ExamId })
+                .ToListAsync(cancellationToken);
+            return rows
+                .GroupBy(r => r.SourceQnum!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.ExamId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        private async Task<HashSet<string>> LoadWeeklyUsedQnumsAsync(
+            int currentExamId,
+            List<string>? extra,
+            CancellationToken cancellationToken)
+        {
+            var exams = await _context.Exams
+                .AsNoTracking()
+                .Select(e => new { e.Id, e.Title })
+                .ToListAsync(cancellationToken);
+            var weeklyIds = exams
+                .Where(e => e.Id != currentExamId && PaperQuotas.IsStudentWeeklyExam(e.Id, e.Title))
+                .Select(e => e.Id)
+                .ToList();
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (weeklyIds.Count > 0)
+            {
+                var qnums = await _context.Questions
+                    .AsNoTracking()
+                    .Where(q => weeklyIds.Contains(q.ExamId) && q.SourceQnum != null && q.SourceQnum != "")
+                    .Select(q => q.SourceQnum!)
+                    .ToListAsync(cancellationToken);
+                foreach (var q in qnums)
+                    set.Add(q);
+            }
+            AddExclude(set, extra);
+            return set;
+        }
+
+        private static HashSet<string>? MergeUsed(IReadOnlyDictionary<string, int> copies, List<string>? extra)
+        {
+            if (extra == null || extra.Count == 0) return null;
+            var set = new HashSet<string>(copies.Keys, StringComparer.OrdinalIgnoreCase);
+            AddExclude(set, extra);
+            return set;
+        }
+
+        private static void AddExclude(HashSet<string> set, List<string>? extra)
+        {
+            if (extra == null) return;
+            foreach (var raw in extra)
+            {
+                var q = (raw ?? "").Trim();
+                if (q.Length > 0) set.Add(q);
+            }
+        }
+
+        private async Task TouchUsageAsync(List<int> bankIds, CancellationToken cancellationToken)
+        {
+            if (bankIds.Count == 0) return;
+            var rows = await _context.QuestionBank
+                .Where(q => bankIds.Contains(q.Id))
+                .ToListAsync(cancellationToken);
+            var qnums = rows.Select(r => r.Qnum).Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+            var fresh = await _context.Questions
+                .AsNoTracking()
+                .Where(q => q.SourceQnum != null && qnums.Contains(q.SourceQnum))
+                .Select(q => new { q.SourceQnum, q.ExamId })
+                .ToListAsync(cancellationToken);
+            var counts = fresh
+                .GroupBy(r => r.SourceQnum!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.ExamId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+            var now = DateTime.UtcNow;
+            foreach (var row in rows)
+            {
+                counts.TryGetValue(row.Qnum, out var n);
+                row.UseCount = n;
+                row.LastUsedAt = now;
+            }
         }
 
         private static void WarnIfShort(List<string> warnings, string label, int need, int got)

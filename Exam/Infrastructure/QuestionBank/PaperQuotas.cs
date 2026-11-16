@@ -52,9 +52,30 @@ namespace Exam.Infrastructure.Banking
 
         public static string NormalizeGrade(string? grade)
         {
-            if (string.IsNullOrWhiteSpace(grade)) return "";
-            var digits = new string(grade.Where(char.IsDigit).ToArray());
-            return digits;
+            var parsed = BankGrades.Parse(grade);
+            return parsed.Count == 0 ? "" : parsed[0];
+        }
+
+        /// <summary>Live student weekly/daily papers (ExamPulse). 94=respublika, 96=smoke — not this cohort.</summary>
+        public static bool IsStudentWeeklyExam(int id, string? title)
+        {
+            if (id is 94 or 96) return false;
+            if (id is 97 or 98 or 99) return true;
+            var t = (title ?? "").Trim().ToLowerInvariant()
+                .Replace("ı", "i").Replace("ə", "e").Replace("ö", "o").Replace("ü", "u");
+            if (t.Contains("respublika") || t.Contains("buraxil") || t.Contains("specialty"))
+                return false;
+            return t.Contains("heftelik") || t.Contains("weekly");
+        }
+
+        /// <summary>Weekly papers have no exam difficulty (asan/orta). Teacher may still filter questions.</summary>
+        public static bool IgnoreExamDifficulty(PaperKind kind, string? audience, bool studentWeeklyPaper = false)
+        {
+            if (studentWeeklyPaper) return true;
+            var a = NormalizeAudience(audience);
+            if (a == "teacher") return false;
+            if (a == "weekly") return true;
+            return kind == PaperKind.Weekly;
         }
 
         public static PaperKind ParseKind(string? kind, string? audience)
