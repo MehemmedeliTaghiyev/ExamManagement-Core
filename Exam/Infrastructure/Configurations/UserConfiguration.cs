@@ -51,6 +51,8 @@ namespace Exam.Infrastructure.Configurations
             builder.Property(u => u.FirstName).HasMaxLength(80);
             builder.Property(u => u.LastName).HasMaxLength(80);
             builder.Property(u => u.Phone).HasMaxLength(40);
+            builder.Property(u => u.Position).HasMaxLength(80);
+            builder.Property(u => u.TeachingSubject).HasMaxLength(80);
             builder.Property(u => u.TrialMessage).HasMaxLength(1000);
 
             builder.HasIndex(u => u.TeacherId);

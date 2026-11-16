@@ -146,6 +146,8 @@ using (var scope = app.Services.CreateScope())
     TrySql("IF COL_LENGTH('Users', 'FirstName') IS NULL ALTER TABLE Users ADD FirstName nvarchar(80) NULL;");
     TrySql("IF COL_LENGTH('Users', 'LastName') IS NULL ALTER TABLE Users ADD LastName nvarchar(80) NULL;");
     TrySql("IF COL_LENGTH('Users', 'Phone') IS NULL ALTER TABLE Users ADD Phone nvarchar(40) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'Position') IS NULL ALTER TABLE Users ADD Position nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Users', 'TeachingSubject') IS NULL ALTER TABLE Users ADD TeachingSubject nvarchar(80) NULL;");
     TrySql("IF COL_LENGTH('Users', 'TrialEndsAt') IS NULL ALTER TABLE Users ADD TrialEndsAt datetime2 NULL;");
     TrySql("IF COL_LENGTH('Users', 'TrialMessage') IS NULL ALTER TABLE Users ADD TrialMessage nvarchar(1000) NULL;");
     TrySql("IF COL_LENGTH('Users', 'TrialNotifiedAt') IS NULL ALTER TABLE Users ADD TrialNotifiedAt datetime2 NULL;");
@@ -196,3 +198,5 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public partial class Program { }

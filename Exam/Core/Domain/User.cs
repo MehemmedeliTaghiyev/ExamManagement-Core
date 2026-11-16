@@ -15,6 +15,8 @@ namespace Exam.Core.Domain
         public string? FirstName { get; set; }
         public string? LastName { get; set; }
         public string? Phone { get; set; }
+        public string? Position { get; set; }
+        public string? TeachingSubject { get; set; }
         public DateTime? TrialEndsAt { get; set; }
         public string? TrialMessage { get; set; }
         public DateTime? TrialNotifiedAt { get; set; }

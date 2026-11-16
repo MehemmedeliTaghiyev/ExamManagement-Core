@@ -36,6 +36,18 @@ namespace Exam.Infrastructure.Services
             return rows.Select(Map).ToList();
         }
 
+        public async Task<IReadOnlyList<TeacherDirectoryDto>> GetTeacherDirectoryAsync()
+        {
+            var rows = await _context.Users.IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(u => u.Role == UserRole.Teacher && !u.IsDeleted)
+                .OrderBy(u => u.FullName)
+                .ThenBy(u => u.Id)
+                .ToListAsync();
+
+            return rows.Select(MapDirectory).ToList();
+        }
+
         public async Task<AdminUserDto?> CreateStudentAsync(CreateStudentDto dto, int teacherId)
         {
             var email = (dto.Email ?? string.Empty).Trim();
@@ -215,9 +227,26 @@ namespace Exam.Infrastructure.Services
             FirstName = u.FirstName,
             LastName = u.LastName,
             Phone = u.Phone,
+            Position = u.Position,
+            TeachingSubject = u.TeachingSubject,
             TrialEndsAt = u.TrialEndsAt,
             TrialMessage = u.TrialMessage,
             TrialNotifiedAt = u.TrialNotifiedAt
         };
+
+        private static TeacherDirectoryDto MapDirectory(Core.Domain.User u)
+        {
+            var subject = string.IsNullOrWhiteSpace(u.TeachingSubject) ? null : u.TeachingSubject.Trim();
+            var region = string.IsNullOrWhiteSpace(u.Position) ? null : u.Position.Trim();
+            return new TeacherDirectoryDto
+            {
+                Id = u.Id,
+                FullName = u.FullName,
+                TeachingSubject = subject,
+                Subject = subject,
+                Position = region,
+                Region = region
+            };
+        }
     }
 }
