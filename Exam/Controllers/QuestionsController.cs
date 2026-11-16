@@ -31,7 +31,7 @@ namespace Exam.Controllers
         {
             await _examService.SyncExamStatusesAsync();
             var exam = await _context.Exams.AsNoTracking().FirstOrDefaultAsync(e => e.Id == examId);
-            if (!_tenant.CanAccessExam(exam))
+            if (!_tenant.CanViewExam(exam))
             {
                 return NotFound(new { message = "İmtahan tapılmadı." });
             }

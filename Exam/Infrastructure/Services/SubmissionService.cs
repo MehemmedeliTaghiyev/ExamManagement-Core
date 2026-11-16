@@ -32,9 +32,9 @@ namespace Exam.Infrastructure.Services
                 throw new KeyNotFoundException($"ID-si {dto.ExamId} olan imtahan tapılmadı.");
             }
 
-            if (!_tenant.CanAccessExam(exam))
+            if (!_tenant.CanViewExam(exam))
             {
-                throw new InvalidOperationException("Bu imtahan sizin müəlliminizə aid deyil.");
+                throw new InvalidOperationException("Bu imtahan sizin üçün açıq deyil.");
             }
 
             if (exam.Status == ExamStatus.Draft)
@@ -309,7 +309,7 @@ namespace Exam.Infrastructure.Services
             return await GetExamSubmissionsAsyncInternal(se =>
                 se.StudentId == studentId
                 && se.Status != StudentExamStatus.InProgress
-                && _context.Exams.Any(e => e.Id == se.ExamId && (_tenant.IsAdmin || e.TeacherId == _tenant.TeacherScopeId)));
+                && _context.Exams.Any(e => e.Id == se.ExamId && (_tenant.IsAdmin || e.IsPublic || e.TeacherId == _tenant.TeacherScopeId)));
         }
 
         public async Task<IReadOnlyList<ExamResultDto>> GetExamSubmissionsAsync(int examId)
@@ -326,7 +326,8 @@ namespace Exam.Infrastructure.Services
             if (studentExam == null) return null;
             if (!isStaff && studentExam.StudentId != requesterId) return null;
             var examForReview = await _context.Exams.FindAsync(studentExam.ExamId);
-            if (!_tenant.CanAccessExam(examForReview)) return null;
+            if (examForReview == null) return null;
+            if (!_tenant.CanViewExam(examForReview) && !isStaff) return null;
 
             await FinalizeExpiredSessionsAsync(studentExam.StudentId, studentExam.ExamId);
             studentExam = await _context.StudentExams.FirstOrDefaultAsync(se => se.Id == studentExamId);
@@ -339,7 +340,15 @@ namespace Exam.Infrastructure.Services
         {
             await FinalizeExpiredSessionsAsync(isStaff ? null : requesterId, examId);
             var examGate = await _context.Exams.FirstOrDefaultAsync(e => e.Id == examId);
-            if (!_tenant.CanAccessExam(examGate)) return null;
+            if (examGate == null) return null;
+            if (isStaff)
+            {
+                if (!_tenant.CanAccessExam(examGate)) return null;
+            }
+            else if (!_tenant.CanViewExam(examGate))
+            {
+                return null;
+            }
 
             if (isStaff)
             {

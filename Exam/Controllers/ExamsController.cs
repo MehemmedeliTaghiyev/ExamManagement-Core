@@ -26,6 +26,7 @@ namespace Exam.Controllers
             _questionBank = questionBank;
         }
 
+        [AllowAnonymous]
         [HttpGet("{id:int}/pdf")]
         public async Task<IActionResult> GetExamPdf(int id)
         {
@@ -47,6 +48,7 @@ namespace Exam.Controllers
         }
 
         // GET: api/exams/1
+        [AllowAnonymous]
         [HttpGet("{id:int}")]
         public async Task<ActionResult<ExamCardDto>> GetExamCard(int id)
         {
@@ -59,6 +61,7 @@ namespace Exam.Controllers
         }
 
         // GET: api/exams
+        [AllowAnonymous]
         [HttpGet("cards")]
         public async Task<ActionResult<IReadOnlyList<ExamCardDto>>> GetAllExamCards()
         {
@@ -73,22 +76,34 @@ namespace Exam.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
-            var createdExam = await _examService.CreateExamAsync(dto);
-
-            if (createdExam == null)
+            try
             {
-                return BadRequest(new { message = "Seçilən fənn (SubjectId) sistemdə tapılmadı." });
+                var createdExam = await _examService.CreateExamAsync(dto);
+
+                if (createdExam == null)
+                {
+                    return BadRequest(new { message = "Seçilən fənn (SubjectId) sistemdə tapılmadı." });
+                }
+
+                return CreatedAtAction(
+                    nameof(GetExamById),
+                    new { id = createdExam.Id },
+                    createdExam
+                );
+            }
+            catch (PublicExamRequiresSingleTopicException ex)
+            {
+                return PublicTopicRejected(ex);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains('|'))
+            {
+                return ShareRejected(ex);
             }
 
-            // Point directly to the Controller action method name
-            return CreatedAtAction(
-                nameof(GetExamById),
-                new { id = createdExam.Id },
-                createdExam
-            );
         }
 
-        // GET: api/exams?search=math&subjectId=2&pageNumber=1&pageSize=10
+        // GET: api/exams?search=math&subjectId=2&teacherId=53&isPublic=true
+        [AllowAnonymous]
         [HttpGet]
         public async Task<IActionResult> GetAllExams([FromQuery] ExamQueryParameters queryParameters)
         {
@@ -96,7 +111,23 @@ namespace Exam.Controllers
             return Ok(pagedExams);
         }
 
+        [AllowAnonymous]
+        [HttpGet("public")]
+        public async Task<IActionResult> GetPublicExams([FromQuery] int? teacherId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50)
+        {
+            var pagedExams = await _examService.GetAllExamsAsync(new ExamQueryParameters
+            {
+                TeacherId = teacherId,
+                IsPublic = true,
+                Visibility = ExamSharing.Public,
+                PageNumber = pageNumber,
+                PageSize = pageSize
+            });
+            return Ok(pagedExams);
+        }
+
         // GET: api/exams/5
+        [AllowAnonymous]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetExamById(int id)
         {
@@ -152,14 +183,48 @@ namespace Exam.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
-            var isUpdated = await _examService.UpdateExamAsync(id, dto);
-
-            if (!isUpdated)
+            try
             {
-                return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı və ya daxil edilən SubjectId yanlışdır." });
-            }
+                var isUpdated = await _examService.UpdateExamAsync(id, dto);
 
-            return NoContent(); // 204 NoContent - Uğurlu yeniləmə cavabı
+                if (!isUpdated)
+                {
+                    return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı və ya daxil edilən SubjectId yanlışdır." });
+                }
+
+                return NoContent();
+            }
+            catch (PublicExamRequiresSingleTopicException ex)
+            {
+                return PublicTopicRejected(ex);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains('|'))
+            {
+                return ShareRejected(ex);
+            }
+        }
+
+        [HttpPost("{id:int}/share")]
+        [HttpPut("{id:int}/share")]
+        public async Task<IActionResult> ShareExam(int id, [FromBody] ShareExamDto dto)
+        {
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
+            try
+            {
+                var shared = await _examService.ShareExamAsync(id, dto ?? new ShareExamDto());
+                if (!shared)
+                    return NotFound(new { message = $"ID-si {id} olan imtahan tapılmadı." });
+                var exam = await _examService.GetExamByIdAsync(id);
+                return Ok(exam);
+            }
+            catch (PublicExamRequiresSingleTopicException ex)
+            {
+                return PublicTopicRejected(ex);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains('|'))
+            {
+                return ShareRejected(ex);
+            }
         }
 
         // DELETE: api/exams/5
@@ -194,6 +259,23 @@ namespace Exam.Controllers
             {
                 return Conflict(new { code = "FROM_BANK_CONFLICT", message = ex.Message });
             }
+            catch (PublicExamRequiresSingleTopicException ex)
+            {
+                return PublicTopicRejected(ex);
+            }
+        }
+
+        private static BadRequestObjectResult PublicTopicRejected(PublicExamRequiresSingleTopicException ex) =>
+            new(new { code = PublicExamRequiresSingleTopicException.ErrorCode, message = ex.Message });
+
+        private static BadRequestObjectResult ShareRejected(InvalidOperationException ex)
+        {
+            var parts = ex.Message.Split('|', 2);
+            return new BadRequestObjectResult(new
+            {
+                code = parts[0],
+                message = parts.Length > 1 ? parts[1] : ex.Message
+            });
         }
 
         [HttpPost("{id}/questions")]

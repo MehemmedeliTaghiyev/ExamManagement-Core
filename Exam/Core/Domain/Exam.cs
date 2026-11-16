@@ -15,6 +15,10 @@ namespace Exam.Core.Domain
         public int SubmissionsCount { get; set; } = 0;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string? PdfFilePath {  get; set; }
-        public int? TeacherId { get; set; }   
+        public int? TeacherId { get; set; }
+        public bool IsPublic { get; set; }
+        public string? Visibility { get; set; }
+        public string? ShareGroupName { get; set; }
+        public string? Topic { get; set; }
     }
 }

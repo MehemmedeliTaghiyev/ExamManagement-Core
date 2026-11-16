@@ -17,5 +17,10 @@
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }
         public DateTime CreatedAt { get; set; }
+        public bool IsPublic { get; set; }
+        public string? Visibility { get; set; }
+        public string? Topic { get; set; }
+        public string? ShareGroupName { get; set; }
+        public List<int>? StudentIds { get; set; }
     }
 }

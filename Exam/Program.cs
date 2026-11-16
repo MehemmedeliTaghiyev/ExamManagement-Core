@@ -152,6 +152,25 @@ using (var scope = app.Services.CreateScope())
     TrySql("IF COL_LENGTH('Users', 'TrialMessage') IS NULL ALTER TABLE Users ADD TrialMessage nvarchar(1000) NULL;");
     TrySql("IF COL_LENGTH('Users', 'TrialNotifiedAt') IS NULL ALTER TABLE Users ADD TrialNotifiedAt datetime2 NULL;");
     TrySql("IF COL_LENGTH('Exams', 'TeacherId') IS NULL ALTER TABLE Exams ADD TeacherId int NULL;");
+    TrySql("IF COL_LENGTH('Exams', 'IsPublic') IS NULL ALTER TABLE Exams ADD IsPublic bit NOT NULL CONSTRAINT DF_Exams_IsPublic DEFAULT(0);");
+    TrySql("IF COL_LENGTH('Exams', 'Visibility') IS NULL ALTER TABLE Exams ADD Visibility nvarchar(20) NULL;");
+    TrySql("IF COL_LENGTH('Exams', 'ShareGroupName') IS NULL ALTER TABLE Exams ADD ShareGroupName nvarchar(80) NULL;");
+    TrySql("IF COL_LENGTH('Exams', 'Topic') IS NULL ALTER TABLE Exams ADD Topic nvarchar(200) NULL;");
+    TrySql(@"
+IF OBJECT_ID('ExamAssignees', 'U') IS NULL
+BEGIN
+    CREATE TABLE ExamAssignees (
+        ExamId int NOT NULL,
+        StudentId int NOT NULL,
+        CONSTRAINT PK_ExamAssignees PRIMARY KEY (ExamId, StudentId)
+    );
+    CREATE INDEX IX_ExamAssignees_StudentId ON ExamAssignees(StudentId);
+END
+");
+    TrySql(@"
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Exams_IsPublic' AND object_id = OBJECT_ID('Exams'))
+    CREATE INDEX IX_Exams_IsPublic ON Exams(IsPublic);
+");
     TrySql("IF COL_LENGTH('Questions', 'InputKind') IS NULL ALTER TABLE Questions ADD InputKind nvarchar(20) NOT NULL CONSTRAINT DF_Questions_InputKind DEFAULT('Choice');");
     TrySql("IF COL_LENGTH('Questions', 'CorrectText') IS NULL ALTER TABLE Questions ADD CorrectText nvarchar(500) NULL;");
     TrySql("IF COL_LENGTH('Questions', 'FigureUrl') IS NULL ALTER TABLE Questions ADD FigureUrl nvarchar(1000) NULL;");

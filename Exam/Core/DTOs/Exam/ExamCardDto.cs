@@ -16,5 +16,9 @@
         public string? PdfFileUrl { get; set; }
         public int? TeacherId { get; set; }
         public string? TeacherName { get; set; }
+        public bool IsPublic { get; set; }
+        public string? Visibility { get; set; }
+        public string? Topic { get; set; }
+        public string? ShareGroupName { get; set; }
     }
 }

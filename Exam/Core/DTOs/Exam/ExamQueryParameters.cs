@@ -2,11 +2,14 @@
 {
     public class ExamQueryParameters
     {
-        private const int MaxPageSize = 50;
+        private const int MaxPageSize = 200;
 
         public string? Search { get; set; }        // İmtahan adına görə axtarış
         public int? SubjectId { get; set; }        // Fənnə görə filtr
         public string? Status { get; set; }       // Statusa görə filtr (məs: Live, Completed)
+        public int? TeacherId { get; set; }
+        public bool? IsPublic { get; set; }
+        public string? Visibility { get; set; }
 
         public int PageNumber { get; set; } = 1;
 
