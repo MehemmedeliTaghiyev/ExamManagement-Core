@@ -24,7 +24,7 @@ Empty `Audience` on a bank row is never selected for weekly or teacher papers. E
 
 Weekly from-bank ignores exam `DifficultyLevel` (asan/orta). Quizzes have no paper difficulty; question difficulties mix inside **one** weekly paper per window. Teacher quizzes may still send `DifficultyLevel` to prefer a band. When a topic has no remaining çətin rows, from-bank takes orta; if orta is empty, asan. Orta requested and empty → asan. Asan does not upgrade. `DifficultyStrict: true` turns fallback off.
 
-Teacher and weekly from-bank do not treat matching rows equally: unused `SourceQnum` first, then lowest `UseCount` / oldest `LastUsedAt`. If the unused pool cannot fill the quota, least-used rows are reused. A successful copy sets `UseCount` to the distinct-exam count for that Qnum.
+Teacher and student weekly/daily from-bank do not treat matching rows equally: unused `SourceQnum` first, then lowest `UseCount` / oldest `LastUsedAt`. A new weekly window skips Qnums already copied onto prior student weekly papers (exam 97 / 98 / 99, or a title with həftəlik/weekly — not 94/96). Reuse least-used only if that unused pool cannot fill the quota. A successful copy sets `UseCount` to the distinct-exam count for that Qnum. Live SmarterASP still needs `QuestionBankUseCount.sql` plus a SourceQnum reconcile on exam 97 before this ships.
 
 Situation/isbat items are copied only when audience is specialty (Blok). Grade-9 buraxılış situation is not injected here.
 

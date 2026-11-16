@@ -119,11 +119,13 @@ namespace Exam.Infrastructure.Services
 
             quota ??= new FromBankRequestDto();
             var kind = PaperQuotas.ParseKind(quota.Kind, quota.Audience);
+            var studentWeekly = kind == PaperKind.Weekly
+                || PaperQuotas.IsStudentWeeklyExam(exam.Id, exam.Title);
             var allowSituation = PaperQuotas.AllowSituation(kind, quota.Audience);
             var allowIsbat = PaperQuotas.AllowIsbat(kind, quota.Audience);
             var audienceFilter = PaperQuotas.NormalizeAudience(quota.Audience)
                 ?? PaperQuotas.AudienceFromKind(kind);
-            var ignoreExamDifficulty = PaperQuotas.IgnoreExamDifficulty(kind, quota.Audience);
+            var ignoreExamDifficulty = PaperQuotas.IgnoreExamDifficulty(kind, quota.Audience, studentWeekly);
 
             await ReplaceOrConflictAsync(examId, cancellationToken);
 
@@ -182,6 +184,9 @@ namespace Exam.Infrastructure.Services
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
             var copyCounts = await LoadCopyCountsAsync(cancellationToken);
+            var usedQnums = studentWeekly
+                ? await LoadWeeklyUsedQnumsAsync(exam.Id, quota.ExcludeQnums, cancellationToken)
+                : MergeUsed(copyCounts, quota.ExcludeQnums);
             var selected = SelectPool(
                 pool,
                 paper,
@@ -189,6 +194,7 @@ namespace Exam.Infrastructure.Services
                 copyCounts,
                 mixDifficulties: ignoreExamDifficulty,
                 quota,
+                usedQnums,
                 out var usedDifficultyFallback);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
@@ -258,6 +264,8 @@ namespace Exam.Infrastructure.Services
                 warnings.Add("Həftəlik sınaqda imtahan çətinliyi yoxdur; DifficultyLevel nəzərə alınmadı (sual çətinlikləri qarışıq).");
             if (usedDifficultyFallback)
                 warnings.Add("Mövzu kvotasında çətin/orta tapılmadı; boş zolaq asan tərəfə endirildi (çətin→orta→asan).");
+            if (studentWeekly && usedQnums is { Count: > 0 })
+                warnings.Add($"Həftəlik kağız əvvəlki həftəlik/daily SourceQnum-ları keçdi ({usedQnums.Count} qnum).");
             if (!paper.FillAny)
             {
                 WarnIfShort(warnings, "MCQ", paper.Mcq, counts[BankSlot.Mcq]);
@@ -313,6 +321,7 @@ namespace Exam.Infrastructure.Services
             IReadOnlyDictionary<string, int> copies,
             bool mixDifficulties,
             FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
             out bool usedDifficultyFallback)
         {
             var rng = Random.Shared;
@@ -335,7 +344,7 @@ namespace Exam.Infrastructure.Services
                     var fit = groups.Where(g => g.All(q => !used.Contains(q.Id)) && g.Count <= remaining).ToList();
                     if (fit.Count == 0) break;
                     var chosen = fit
-                        .OrderBy(g => g.All(q => BankUsage.Unused(q, copies)) ? 0 : 1)
+                        .OrderBy(g => g.All(q => BankUsage.Unused(q, copies, usedQnums)) ? 0 : 1)
                         .ThenBy(g => g.Min(q => BankUsage.EffectiveUse(q, copies)))
                         .ThenBy(g => g.Min(q => q.LastUsedAt ?? DateTime.MinValue))
                         .ThenBy(g => g.Count == remaining ? 0 : 1)
@@ -355,13 +364,13 @@ namespace Exam.Infrastructure.Services
             {
                 var need = Math.Max(0, paper.Mcq - result.Count);
                 var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) != BankSlot.Situation);
-                TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+                TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
                 return result;
             }
 
-            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
-            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
-            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.Mcq, paper.Mcq, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.OpenCoded, paper.OpenCoded, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
+            TakeSlot(result, used, pool, BankSlot.Written, paper.Written, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
             return result;
         }
 
@@ -375,11 +384,12 @@ namespace Exam.Infrastructure.Services
             Random rng,
             bool mixDifficulties,
             FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
             ref bool usedDifficultyFallback)
         {
             if (need <= 0) return;
             var candidates = pool.Where(q => !used.Contains(q.Id) && Classify(q) == slot);
-            TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, ref usedDifficultyFallback);
+            TakeWithBands(result, used, candidates, need, copies, rng, mixDifficulties, quota, usedQnums, ref usedDifficultyFallback);
         }
 
         private static void TakeWithBands(
@@ -391,6 +401,7 @@ namespace Exam.Infrastructure.Services
             Random rng,
             bool mixDifficulties,
             FromBankRequestDto quota,
+            IReadOnlySet<string>? usedQnums,
             ref bool usedDifficultyFallback)
         {
             var bands = BankDifficulty.Plan(
@@ -403,13 +414,14 @@ namespace Exam.Infrastructure.Services
             List<QuestionBank> taken;
             if (bands == null)
             {
-                taken = BankUsage.TakePreferred(candidates, need, result, copies, rng);
+                taken = BankUsage.TakePreferred(candidates, need, result, copies, rng, usedQnums);
             }
             else
             {
                 taken = BankDifficulty.Fill(
                     candidates, need, result, copies, rng, bands, out var fell,
-                    strict: quota.DifficultyStrict == true);
+                    strict: quota.DifficultyStrict == true,
+                    usedQnums: usedQnums);
                 if (fell) usedDifficultyFallback = true;
             }
             foreach (var q in taken)
@@ -538,6 +550,52 @@ namespace Exam.Infrastructure.Services
             return rows
                 .GroupBy(r => r.SourceQnum!, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Select(x => x.ExamId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        private async Task<HashSet<string>> LoadWeeklyUsedQnumsAsync(
+            int currentExamId,
+            List<string>? extra,
+            CancellationToken cancellationToken)
+        {
+            var exams = await _context.Exams
+                .AsNoTracking()
+                .Select(e => new { e.Id, e.Title })
+                .ToListAsync(cancellationToken);
+            var weeklyIds = exams
+                .Where(e => e.Id != currentExamId && PaperQuotas.IsStudentWeeklyExam(e.Id, e.Title))
+                .Select(e => e.Id)
+                .ToList();
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (weeklyIds.Count > 0)
+            {
+                var qnums = await _context.Questions
+                    .AsNoTracking()
+                    .Where(q => weeklyIds.Contains(q.ExamId) && q.SourceQnum != null && q.SourceQnum != "")
+                    .Select(q => q.SourceQnum!)
+                    .ToListAsync(cancellationToken);
+                foreach (var q in qnums)
+                    set.Add(q);
+            }
+            AddExclude(set, extra);
+            return set;
+        }
+
+        private static HashSet<string>? MergeUsed(IReadOnlyDictionary<string, int> copies, List<string>? extra)
+        {
+            if (extra == null || extra.Count == 0) return null;
+            var set = new HashSet<string>(copies.Keys, StringComparer.OrdinalIgnoreCase);
+            AddExclude(set, extra);
+            return set;
+        }
+
+        private static void AddExclude(HashSet<string> set, List<string>? extra)
+        {
+            if (extra == null) return;
+            foreach (var raw in extra)
+            {
+                var q = (raw ?? "").Trim();
+                if (q.Length > 0) set.Add(q);
+            }
         }
 
         private async Task TouchUsageAsync(List<int> bankIds, CancellationToken cancellationToken)

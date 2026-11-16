@@ -17,6 +17,8 @@ namespace Exam.Core.DTOs.QuestionBank
         public int? AsanCount { get; set; }
         public int? OrtaCount { get; set; }
         public int? CetinCount { get; set; }
+        /// <summary>Qnums to treat as already used (prior weekly/daily papers).</summary>
+        public List<string>? ExcludeQnums { get; set; }
         public List<string>? Topics { get; set; }
         /// <summary>weekly / teacher / buraxılış / blok (Sınaq, Buraxılış, Blok also accepted).</summary>
         public string? Kind { get; set; }

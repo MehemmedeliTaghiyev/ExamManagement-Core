@@ -68,14 +68,15 @@ namespace Exam.Infrastructure.Banking
             Random rng,
             IReadOnlyDictionary<string, int>? bands,
             out bool usedFallback,
-            bool strict = false)
+            bool strict = false,
+            IReadOnlySet<string>? usedQnums = null)
         {
             usedFallback = false;
             if (need <= 0) return new List<QuestionBank>();
             var pool = candidates.ToList();
             if (pool.Count == 0) return new List<QuestionBank>();
             if (bands == null || bands.Values.Sum() <= 0)
-                return BankUsage.TakePreferred(pool, need, already, copies, rng);
+                return BankUsage.TakePreferred(pool, need, already, copies, rng, usedQnums);
 
             var chosen = already.ToList();
             var chosenIds = chosen.Select(q => q.Id).ToHashSet();
@@ -101,7 +102,7 @@ namespace Exam.Infrastructure.Banking
                     var want = topicBands.GetValueOrDefault(band);
                     if (want <= 0) continue;
                     var chain = strict ? new[] { band } : Chain(band);
-                    var got = TakeChain(topicPool, want, result, chosen, chosenIds, copies, rng, chain, out var fell);
+                    var got = TakeChain(topicPool, want, result, chosen, chosenIds, copies, rng, chain, usedQnums, out var fell);
                     takenHere += got;
                     if (fell) usedFallback = true;
                     if (result.Count >= need) return result;
@@ -111,7 +112,7 @@ namespace Exam.Infrastructure.Banking
                 if (still > 0)
                 {
                     var rest = topicPool.Where(q => !chosenIds.Contains(q.Id));
-                    var extra = BankUsage.TakePreferred(rest, still, chosen, copies, rng);
+                    var extra = BankUsage.TakePreferred(rest, still, chosen, copies, rng, usedQnums);
                     AddTaken(extra, result, chosen, chosenIds);
                     if (result.Count >= need) return result;
                 }
@@ -120,7 +121,7 @@ namespace Exam.Infrastructure.Banking
             if (result.Count < need)
             {
                 var rest = pool.Where(q => !chosenIds.Contains(q.Id));
-                var extra = BankUsage.TakePreferred(rest, need - result.Count, chosen, copies, rng);
+                var extra = BankUsage.TakePreferred(rest, need - result.Count, chosen, copies, rng, usedQnums);
                 AddTaken(extra, result, chosen, chosenIds);
             }
 
@@ -136,6 +137,7 @@ namespace Exam.Infrastructure.Banking
             IReadOnlyDictionary<string, int> copies,
             Random rng,
             IReadOnlyList<string> chain,
+            IReadOnlySet<string>? usedQnums,
             out bool usedFallback)
         {
             usedFallback = false;
@@ -145,7 +147,7 @@ namespace Exam.Infrastructure.Banking
             {
                 if (got >= want) break;
                 var slice = topicPool.Where(q => !chosenIds.Contains(q.Id) && Band(q) == band);
-                var take = BankUsage.TakePreferred(slice, want - got, chosen, copies, rng);
+                var take = BankUsage.TakePreferred(slice, want - got, chosen, copies, rng, usedQnums);
                 if (take.Count == 0) continue;
                 if (band != preferred) usedFallback = true;
                 AddTaken(take, result, chosen, chosenIds);
