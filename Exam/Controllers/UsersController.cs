@@ -21,16 +21,28 @@ namespace Exam.Controllers
             _users = users;
         }
 
+        [AllowAnonymous]
         [HttpGet]
         public async Task<IActionResult> Get([FromQuery] string role = "Student", [FromQuery] bool includeDeleted = true)
         {
-            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User)) return Forbid();
-            var actorRole = GetActorRole();
             if (!Enum.TryParse<UserRole>(role, true, out var parsed) || parsed == UserRole.Admin)
             {
                 return BadRequest(new { message = "Rol Teacher və ya Student olmalıdır." });
             }
 
+            var isStaff = RoleClaims.IsAdmin(User) || RoleClaims.IsTeacher(User);
+            if (parsed == UserRole.Teacher && !isStaff)
+            {
+                var directory = await _users.GetTeacherDirectoryAsync();
+                return Ok(directory);
+            }
+
+            if (!isStaff)
+            {
+                return User?.Identity?.IsAuthenticated == true ? Forbid() : Unauthorized();
+            }
+
+            var actorRole = GetActorRole();
             if (actorRole == UserRole.Teacher)
             {
                 parsed = UserRole.Student;
