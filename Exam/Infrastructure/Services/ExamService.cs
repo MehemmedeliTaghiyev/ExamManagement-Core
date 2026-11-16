@@ -1,6 +1,7 @@
 ﻿using Exam.Core.Domain;
 using Exam.Core.DTOs.Exam;
 using Exam.Core.Enums;
+using Exam.Core.Exceptions;
 using Exam.Core.Interfaces;
 using Exam.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -109,6 +110,9 @@ namespace Exam.Infrastructure.Services
             var isDraft = dto.IsDraft
                 || string.Equals(dto.Status, "Draft", StringComparison.OrdinalIgnoreCase);
 
+            var (isPublic, visibility) = ExamSharing.Normalize(dto.IsPublic, dto.Visibility);
+            ExamSharing.EnsurePublicAllowsTopics(isPublic, TopicHints(dto.Topic, null));
+
             var newExam = new Exam.Core.Domain.Exam
             {
                 SubjectId = dto.SubjectId,
@@ -120,10 +124,16 @@ namespace Exam.Infrastructure.Services
                 Status = isDraft ? Core.Enums.ExamStatus.Draft : ResolveStatus(start, end, now),
                 SubmissionsCount = 0,
                 CreatedAt = now,
-                TeacherId = _tenant.IsAdmin ? _tenant.UserId : _tenant.TeacherScopeId ?? _tenant.UserId
+                TeacherId = _tenant.IsAdmin ? _tenant.UserId : _tenant.TeacherScopeId ?? _tenant.UserId,
+                IsPublic = isPublic,
+                Visibility = visibility,
+                ShareGroupName = ShareGroupOf(visibility, dto.ShareGroupName ?? dto.GroupName),
+                Topic = string.IsNullOrWhiteSpace(dto.Topic) ? null : dto.Topic.Trim()
             };
 
             _context.Exams.Add(newExam);
+            await _context.SaveChangesAsync();
+            await ReplaceAssigneesAsync(newExam, visibility, dto.StudentIds);
             await _context.SaveChangesAsync();
 
             return newExam;
@@ -152,7 +162,11 @@ namespace Exam.Infrastructure.Services
                             Status = exam.Status.ToString(),
                             PdfFilePath = exam.PdfFilePath,
                             TeacherId = exam.TeacherId,
-                            TeacherName = teacher != null ? teacher.FullName : null
+                            TeacherName = teacher != null ? teacher.FullName : null,
+                            IsPublic = exam.IsPublic,
+                            Visibility = exam.Visibility ?? (exam.IsPublic ? ExamSharing.Public : ExamSharing.Private),
+                            Topic = exam.Topic,
+                            ShareGroupName = exam.ShareGroupName
                         };
 
             var card = await query.FirstOrDefaultAsync();
@@ -181,7 +195,11 @@ namespace Exam.Infrastructure.Services
                             Status = exam.Status.ToString(),
                             PdfFilePath = exam.PdfFilePath,
                             TeacherId = exam.TeacherId,
-                            TeacherName = teacher != null ? teacher.FullName : null
+                            TeacherName = teacher != null ? teacher.FullName : null,
+                            IsPublic = exam.IsPublic,
+                            Visibility = exam.Visibility ?? (exam.IsPublic ? ExamSharing.Public : ExamSharing.Private),
+                            Topic = exam.Topic,
+                            ShareGroupName = exam.ShareGroupName
                         };
 
             var cards = await query.ToListAsync();
@@ -267,9 +285,13 @@ namespace Exam.Infrastructure.Services
                               Status = exam.Status.ToString(),
                               StartTime = exam.StartTime,
                               EndTime = exam.EndTime,
-                              CreatedAt = exam.CreatedAt
+                              CreatedAt = exam.CreatedAt,
+                              IsPublic = exam.IsPublic,
+                              Visibility = exam.Visibility ?? (exam.IsPublic ? ExamSharing.Public : ExamSharing.Private),
+                              Topic = exam.Topic,
+                              ShareGroupName = exam.ShareGroupName
                           }).FirstOrDefaultAsync();
-            return AttachUrl(dto);
+            return await AttachShareAsync(dto);
         }
 
         public async Task<ExamResponseDto?> GetExamResponseByIdAsync(int id)
@@ -294,9 +316,13 @@ namespace Exam.Infrastructure.Services
                               Status = exam.Status.ToString(),
                               StartTime = exam.StartTime,
                               EndTime = exam.EndTime,
-                              CreatedAt = exam.CreatedAt
+                              CreatedAt = exam.CreatedAt,
+                              IsPublic = exam.IsPublic,
+                              Visibility = exam.Visibility ?? (exam.IsPublic ? ExamSharing.Public : ExamSharing.Private),
+                              Topic = exam.Topic,
+                              ShareGroupName = exam.ShareGroupName
                           }).FirstOrDefaultAsync();
-            return AttachUrl(dto);
+            return await AttachShareAsync(dto);
         }
 
         public async Task<bool> UpdateExamAsync(int id, UpdateExamDto dto)
@@ -317,9 +343,41 @@ namespace Exam.Infrastructure.Services
             exam.StartTime = dto.StartTime;
             exam.EndTime = dto.EndTime;
             exam.Status = Enum.Parse<Core.Enums.ExamStatus>(dto.Status, ignoreCase: true);
+            if (dto.IsPublic.HasValue || !string.IsNullOrWhiteSpace(dto.Visibility) || dto.StudentIds != null
+                || dto.GroupName != null || dto.ShareGroupName != null)
+            {
+                await ApplyShareAsync(
+                    exam,
+                    dto.IsPublic,
+                    dto.Visibility,
+                    dto.ShareGroupName ?? dto.GroupName,
+                    dto.StudentIds,
+                    dto.Topic);
+            }
+            else if (!string.IsNullOrWhiteSpace(dto.Topic))
+            {
+                exam.Topic = dto.Topic.Trim();
+            }
             _context.Exams.Update(exam);
             await _context.SaveChangesAsync();
 
+            return true;
+        }
+
+        public async Task<bool> ShareExamAsync(int id, ShareExamDto dto)
+        {
+            var exam = await _context.Exams.FindAsync(id);
+            if (!_tenant.CanAccessExam(exam))
+                return false;
+
+            await ApplyShareAsync(
+                exam,
+                dto.IsPublic,
+                dto.Visibility,
+                dto.ShareGroupName ?? dto.GroupName,
+                dto.StudentIds,
+                extraTopic: null);
+            await _context.SaveChangesAsync();
             return true;
         }
 
@@ -367,10 +425,22 @@ namespace Exam.Infrastructure.Services
         public async Task<PagedResult<ExamResponseDto>> GetAllExamsAsync(ExamQueryParameters queryParameters)
         {
             await SyncExamStatusesAsync();
-            var examsQuery = _tenant.VisibleExams();
-            if (_tenant.IsStudent)
+            var directoryPublic = queryParameters.IsPublic == true
+                || string.Equals(queryParameters.Visibility, ExamSharing.Public, StringComparison.OrdinalIgnoreCase);
+            IQueryable<Exam.Core.Domain.Exam> examsQuery;
+            if (directoryPublic)
             {
-                examsQuery = examsQuery.Where(e => e.Status != Core.Enums.ExamStatus.Draft);
+                examsQuery = _context.Exams.Where(e => e.IsPublic && e.Status != Core.Enums.ExamStatus.Draft);
+                if (queryParameters.TeacherId.HasValue)
+                    examsQuery = examsQuery.Where(e => e.TeacherId == queryParameters.TeacherId.Value);
+            }
+            else
+            {
+                examsQuery = _tenant.VisibleExams();
+                if (_tenant.IsStudent || (!_tenant.IsAdmin && !_tenant.IsTeacher))
+                    examsQuery = examsQuery.Where(e => e.Status != Core.Enums.ExamStatus.Draft);
+                if (queryParameters.TeacherId.HasValue)
+                    examsQuery = examsQuery.Where(e => e.TeacherId == queryParameters.TeacherId.Value);
             }
             var query = from exam in examsQuery
                         join subject in _context.Subjects on exam.SubjectId equals subject.Id
@@ -391,7 +461,11 @@ namespace Exam.Infrastructure.Services
                             Status = exam.Status.ToString(),
                             StartTime = exam.StartTime,
                             EndTime = exam.EndTime,
-                            CreatedAt = exam.CreatedAt
+                            CreatedAt = exam.CreatedAt,
+                            IsPublic = exam.IsPublic,
+                            Visibility = exam.Visibility ?? (exam.IsPublic ? ExamSharing.Public : ExamSharing.Private),
+                            Topic = exam.Topic,
+                            ShareGroupName = exam.ShareGroupName
                         };
 
             // 2. Search (Axtarış)
@@ -416,12 +490,15 @@ namespace Exam.Infrastructure.Services
 
             // 5. Ümumi uyğun gələn sayını alırıq
             var totalCount = await query.CountAsync();
+            var pageSize = queryParameters.PageSize;
+            if (queryParameters.TeacherId.HasValue && pageSize < 50)
+                pageSize = Math.Min(200, Math.Max(totalCount, 50));
 
             // 6. Sıralama və Pagination (Səhifələmə)
             var items = await query
                 .OrderByDescending(e => e.CreatedAt)
-                .Skip((queryParameters.PageNumber - 1) * queryParameters.PageSize)
-                .Take(queryParameters.PageSize)
+                .Skip((queryParameters.PageNumber - 1) * pageSize)
+                .Take(pageSize)
                 .ToListAsync();
             items.ForEach(i => AttachUrl(i));
 
@@ -431,7 +508,7 @@ namespace Exam.Infrastructure.Services
                 Items = items,
                 TotalCount = totalCount,
                 PageNumber = queryParameters.PageNumber,
-                PageSize = queryParameters.PageSize
+                PageSize = pageSize
             };
         }
 
@@ -497,6 +574,112 @@ namespace Exam.Infrastructure.Services
             };
             response.AttachFigure(question.FigureUrl);
             return response;
+        }
+
+        private async Task<ExamResponseDto?> AttachShareAsync(ExamResponseDto? dto)
+        {
+            if (dto == null) return null;
+            AttachUrl(dto);
+            if (_tenant.IsAdmin || _tenant.IsTeacher)
+            {
+                dto.StudentIds = await _context.ExamAssignees
+                    .Where(a => a.ExamId == dto.Id)
+                    .Select(a => a.StudentId)
+                    .ToListAsync();
+            }
+            return dto;
+        }
+
+        private static IEnumerable<string?> TopicHints(string? topic, IEnumerable<string?>? extra)
+        {
+            if (extra != null)
+            {
+                foreach (var item in extra)
+                    yield return item;
+            }
+            yield return topic;
+        }
+
+        private static string? ShareGroupOf(string visibility, string? groupName)
+        {
+            var name = string.IsNullOrWhiteSpace(groupName) ? null : groupName.Trim();
+            if (visibility != ExamSharing.Group)
+                return visibility == ExamSharing.Public || visibility == ExamSharing.Private ? null : name;
+            if (string.IsNullOrWhiteSpace(name))
+                throw new InvalidOperationException("GROUP_REQUIRED|Qrup seçin. Qrup paylaşımı üçün qrup adı lazımdır.");
+            return name;
+        }
+
+        private async Task ApplyShareAsync(
+            Exam.Core.Domain.Exam exam,
+            bool? isPublic,
+            string? visibility,
+            string? groupName,
+            List<int>? studentIds,
+            string? extraTopic)
+        {
+            var (pub, vis) = ExamSharing.Normalize(isPublic ?? exam.IsPublic, visibility ?? exam.Visibility);
+            await ExamSharing.EnsurePublicSingleTopicAsync(
+                _context,
+                exam.Id,
+                pub,
+                TopicHints(extraTopic ?? exam.Topic, null));
+            exam.IsPublic = pub;
+            exam.Visibility = vis;
+            exam.ShareGroupName = ShareGroupOf(vis, groupName ?? exam.ShareGroupName);
+            if (!string.IsNullOrWhiteSpace(extraTopic))
+            {
+                exam.Topic = extraTopic.Trim();
+            }
+            else
+            {
+                var topics = await ExamSharing.TopicsForExamAsync(_context, exam.Id);
+                if (topics.Count == 1)
+                    exam.Topic = topics[0];
+            }
+
+            await ReplaceAssigneesAsync(exam, vis, studentIds);
+        }
+
+        private async Task ReplaceAssigneesAsync(Exam.Core.Domain.Exam exam, string visibility, List<int>? studentIds)
+        {
+            if (studentIds == null && visibility == ExamSharing.Students)
+                throw new InvalidOperationException("STUDENTS_REQUIRED|Ən azı bir şagird seçin.");
+
+            if (studentIds == null && visibility != ExamSharing.Students)
+            {
+                if (visibility is ExamSharing.Public or ExamSharing.Private or ExamSharing.Group)
+                {
+                    var stale = _context.ExamAssignees.Where(a => a.ExamId == exam.Id);
+                    _context.ExamAssignees.RemoveRange(stale);
+                }
+                return;
+            }
+
+            var existing = _context.ExamAssignees.Where(a => a.ExamId == exam.Id);
+            _context.ExamAssignees.RemoveRange(existing);
+            if (visibility != ExamSharing.Students)
+                return;
+
+            var ids = (studentIds ?? []).Where(id => id > 0).Distinct().ToList();
+            if (ids.Count == 0)
+                throw new InvalidOperationException("STUDENTS_REQUIRED|Ən azı bir şagird seçin.");
+
+            var allowed = await _context.Users.IgnoreQueryFilters()
+                .Where(u => ids.Contains(u.Id)
+                    && u.Role == UserRole.Student
+                    && !u.IsDeleted
+                    && u.TeacherId == exam.TeacherId)
+                .Select(u => u.Id)
+                .ToListAsync();
+            foreach (var id in allowed)
+            {
+                _context.ExamAssignees.Add(new ExamAssignee
+                {
+                    ExamId = exam.Id,
+                    StudentId = id
+                });
+            }
         }
 
     }

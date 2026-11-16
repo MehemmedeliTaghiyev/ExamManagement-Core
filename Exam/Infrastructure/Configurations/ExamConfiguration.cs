@@ -20,6 +20,16 @@ namespace Exam.Infrastructure.Configurations
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasIndex(e => e.TeacherId);
+
+            builder.Property(e => e.IsPublic)
+                .HasDefaultValue(false);
+            builder.Property(e => e.Visibility)
+                .HasMaxLength(20);
+            builder.Property(e => e.ShareGroupName)
+                .HasMaxLength(80);
+            builder.Property(e => e.Topic)
+                .HasMaxLength(200);
+            builder.HasIndex(e => e.IsPublic);
         }
     }
 }

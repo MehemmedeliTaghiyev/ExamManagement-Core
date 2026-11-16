@@ -24,5 +24,17 @@ namespace Exam.Core.DTOs.Exam
         public bool IsDraft { get; set; }
 
         public string? Status { get; set; }
+
+        public bool IsPublic { get; set; }
+
+        public string? Visibility { get; set; }
+
+        public string? GroupName { get; set; }
+
+        public string? ShareGroupName { get; set; }
+
+        public List<int>? StudentIds { get; set; }
+
+        public string? Topic { get; set; }
     }
 }

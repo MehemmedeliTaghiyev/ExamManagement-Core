@@ -48,6 +48,14 @@ namespace Exam.Infrastructure.Services
             return rows.Select(MapDirectory).ToList();
         }
 
+        public async Task<TeacherDirectoryDto?> GetPublicTeacherAsync(int id)
+        {
+            var row = await _context.Users.IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == id && u.Role == UserRole.Teacher && !u.IsDeleted);
+            return row == null ? null : MapDirectory(row);
+        }
+
         public async Task<AdminUserDto?> CreateStudentAsync(CreateStudentDto dto, int teacherId)
         {
             var email = (dto.Email ?? string.Empty).Trim();

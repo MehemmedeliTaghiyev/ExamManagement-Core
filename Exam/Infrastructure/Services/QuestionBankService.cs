@@ -3,6 +3,7 @@ using Exam.Core.DTOs.QuestionBank;
 using Exam.Core.Enums;
 using Exam.Core.Exceptions;
 using Exam.Core.Interfaces;
+using Exam.Infrastructure;
 using Exam.Infrastructure.Banking;
 using Microsoft.EntityFrameworkCore;
 
@@ -98,13 +99,12 @@ namespace Exam.Infrastructure.Services
                 throw new KeyNotFoundException("İmtahan tapılmadı.");
 
             quota ??= new FromBankRequestDto();
+            ExamSharing.EnsurePublicAllowsTopics(exam.IsPublic, quota.Topics ?? Enumerable.Empty<string>());
             var kind = PaperQuotas.ParseKind(quota.Kind, quota.Audience);
             var allowSituation = PaperQuotas.AllowSituation(kind, quota.Audience);
             var allowIsbat = PaperQuotas.AllowIsbat(kind, quota.Audience);
             var audienceFilter = PaperQuotas.NormalizeAudience(quota.Audience)
                 ?? PaperQuotas.AudienceFromKind(kind);
-
-            await ReplaceOrConflictAsync(examId, cancellationToken);
 
             var paper = ResolveQuota(quota, kind, exam.TotalQuestions);
 
@@ -153,6 +153,10 @@ namespace Exam.Infrastructure.Services
                 pool = pool.Where(q => string.IsNullOrWhiteSpace(q.SituationId)).ToList();
 
             var selected = SelectPool(pool, paper, allowSituation);
+            ExamSharing.EnsurePublicAllowsTopics(
+                exam.IsPublic,
+                (quota.Topics ?? Enumerable.Empty<string>()).Concat(selected.Select(q => q.MainTopic)));
+            await ReplaceOrConflictAsync(examId, cancellationToken);
             var selectedIds = selected.Select(q => q.Id).ToList();
             var bankOptions = selectedIds.Count == 0
                 ? new List<QuestionBankOption>()
@@ -213,6 +217,9 @@ namespace Exam.Infrastructure.Services
             }
 
             exam.TotalQuestions = await _context.Questions.CountAsync(q => q.ExamId == examId, cancellationToken);
+            var copiedTopics = ExamSharing.DistinctTopics(selected.Select(q => q.MainTopic));
+            if (copiedTopics.Count == 1)
+                exam.Topic = copiedTopics[0];
             await _context.SaveChangesAsync(cancellationToken);
 
             var warnings = new List<string>();

@@ -7,6 +7,7 @@ namespace Exam.Core.Interfaces
     {
         Task<IReadOnlyList<AdminUserDto>> GetUsersAsync(UserRole role, bool includeDeleted, int actorId, UserRole actorRole);
         Task<IReadOnlyList<TeacherDirectoryDto>> GetTeacherDirectoryAsync();
+        Task<TeacherDirectoryDto?> GetPublicTeacherAsync(int id);
         Task<AdminUserDto?> CreateStudentAsync(CreateStudentDto dto, int teacherId);
         Task<AdminUserDto?> CreateTeacherAsync(CreateTeacherDto dto);
         Task<AdminUserDto?> UpdateTeacherTrialAsync(int teacherId, UpdateTeacherTrialDto dto);

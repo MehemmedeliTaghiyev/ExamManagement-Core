@@ -15,6 +15,7 @@ namespace Exam.Core.Interfaces
         Task<PagedResult<ExamResponseDto>> GetAllExamsAsync(ExamQueryParameters queryParameters);
         Task<Exam.Core.Domain.Exam?> CreateExamAsync(CreateExamDto dto);
         Task<bool> UpdateExamAsync(int id, UpdateExamDto dto);
+        Task<bool> ShareExamAsync(int id, ShareExamDto dto);
         Task<bool> DeleteExamAsync(int id);
         Task<bool> UpdateExamPdfPathAsync(int examId, string relativePath);
         Task<ExamResponseDto?> SaveExamPdfAndSlotsAsync(int examId, Stream content, string fileName, string contentType, int questionCount);

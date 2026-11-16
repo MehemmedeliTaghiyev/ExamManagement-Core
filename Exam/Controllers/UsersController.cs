@@ -52,6 +52,23 @@ namespace Exam.Controllers
             return Ok(list);
         }
 
+        [AllowAnonymous]
+        [HttpGet("{id:int}")]
+        [HttpGet("{id:int}/profile")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            var teacher = await _users.GetPublicTeacherAsync(id);
+            if (teacher != null)
+                return Ok(teacher);
+
+            if (User?.Identity?.IsAuthenticated != true)
+                return Unauthorized();
+            if (!RoleClaims.IsAdmin(User) && !RoleClaims.IsTeacher(User))
+                return Forbid();
+
+            return NotFound(new { message = "İstifadəçi tapılmadı." });
+        }
+
         [HttpPost]
         [HttpPost("students")]
         [HttpPost("create-student")]
