@@ -175,6 +175,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Exams_IsPublic' AND ob
     TrySql("IF COL_LENGTH('Questions', 'CorrectText') IS NULL ALTER TABLE Questions ADD CorrectText nvarchar(500) NULL;");
     TrySql("IF COL_LENGTH('Questions', 'FigureUrl') IS NULL ALTER TABLE Questions ADD FigureUrl nvarchar(1000) NULL;");
     TrySql("IF COL_LENGTH('Questions', 'SourceQnum') IS NULL ALTER TABLE Questions ADD SourceQnum nvarchar(64) NULL;");
+    TrySql("IF COL_LENGTH('QuestionBank', 'UseCount') IS NULL ALTER TABLE QuestionBank ADD UseCount int NOT NULL CONSTRAINT DF_QuestionBank_UseCount DEFAULT(0);");
+    TrySql("IF COL_LENGTH('QuestionBank', 'LastUsedAt') IS NULL ALTER TABLE QuestionBank ADD LastUsedAt datetime2 NULL;");
     TrySql("IF COL_LENGTH('QuestionOptions', 'OptionText') IS NOT NULL ALTER TABLE QuestionOptions ALTER COLUMN OptionText nvarchar(max) NOT NULL;");
     TrySql(@"
 IF COL_LENGTH('Users', 'UserName') IS NOT NULL

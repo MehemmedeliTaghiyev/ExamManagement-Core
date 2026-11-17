@@ -61,6 +61,11 @@ namespace Exam.Infrastructure.Configurations
 
             builder.Property(q => q.FigureUrl)
                 .HasMaxLength(1000);
+
+            builder.Property(q => q.UseCount)
+                .HasDefaultValue(0);
+
+            builder.Property(q => q.LastUsedAt);
         }
     }
 }

@@ -20,5 +20,8 @@ namespace Exam.Core.Domain
         public string? SituationId { get; set; }
         public string? SituationTitle { get; set; }
         public string? FigureUrl { get; set; }
+        /// <summary>Distinct exams that copied this Qnum (SourceQnum). Unused rows are preferred.</summary>
+        public int UseCount { get; set; }
+        public DateTime? LastUsedAt { get; set; }
     }
 }
